@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-plugins-official",
+  "description": "Stub marketplace baked into claude-vertex image. Full marketplace fetched on demand by `claude plugin marketplace update`.",
+  "owner": {
+    "name": "Anthropic",
+    "email": "support@anthropic.com"
+  },
+  "plugins": [
+    {
+      "name": "superpowers",
+      "description": "Superpowers teaches Claude brainstorming, subagent driven development with built in code review, systematic debugging, and red/green TDD.",
+      "category": "development",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/obra/superpowers.git",
+        "sha": "f2cbfbefebbfef77321e4c9abc9e949826bea9d7"
+      },
+      "homepage": "https://github.com/obra/superpowers.git"
+    }
+  ]
+}

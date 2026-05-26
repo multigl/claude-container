@@ -21,11 +21,12 @@ claude-vertex          # opens Claude Code, billed through Vida's Vertex project
 ## Prerequisites
 
 1. **Docker Desktop** (or any Docker engine) running.
-2. **A `@vida.com` Google account** with access to the Vertex project
+2. **[`just`](https://github.com/casey/just)** — `brew install just`.
+3. **A `@vida.com` Google account** with access to the Vertex project
    `vertex-test-495715`. (See the Confluence page
    [Claude Code on Vertex-AI](https://vidahealth.atlassian.net/wiki/spaces/IT/pages/4534337542)
    if you don't have access yet.)
-3. **`~/.local/bin` on `PATH`** (or set `BIN_DIR=/usr/local/bin` when installing).
+4. **`~/.local/bin` on `PATH`** (or set `BIN_DIR=/usr/local/bin` when installing).
 
 No host `gcloud` install required — the container ships its own.
 
@@ -34,9 +35,9 @@ No host `gcloud` install required — the container ships its own.
 ```sh
 git clone <this-repo> claude-vertex && cd claude-vertex
 
-make build      # build the image (~5 min first time)
-make auth       # one-time gcloud login (paste URL into browser, paste code back)
-make install    # symlink `claude-vertex` onto PATH
+just build      # build the image (~5 min first time)
+just auth       # one-time gcloud login (paste URL into browser, paste code back)
+just install    # symlink `claude-vertex` onto PATH
 ```
 
 Then from any project:
@@ -55,15 +56,15 @@ That's it.
 | `claude-vertex`          | Run `claude` against current directory                      |
 | `claude-vertex shell`    | Drop into `bash` inside the container                       |
 | `claude-vertex -- <args>`| Pass flags through to `claude` (e.g. `claude-vertex -- --help`) |
-| `make build`             | Build image                                                 |
-| `make rebuild`           | Rebuild without cache                                       |
-| `make auth`              | One-time gcloud ADC login (creds saved to docker volume)    |
-| `make reset-auth`        | Wipe credentials volume; forces re-auth                     |
-| `make doctor`            | Self-check: docker, image, auth volume, host clock          |
-| `make install`           | Symlink wrapper to `~/.local/bin/claude-vertex`             |
-| `make uninstall`         | Remove the symlink                                          |
-| `make clean`             | Remove the image                                            |
-| `make help`              | Show this table                                             |
+| `just build`             | Build image                                                 |
+| `just rebuild`           | Rebuild without cache                                       |
+| `just auth`              | One-time gcloud ADC login (creds saved to docker volume)    |
+| `just reset-auth`        | Wipe credentials volume; forces re-auth                     |
+| `just doctor`            | Self-check: docker, image, auth volume, host clock          |
+| `just install`           | Symlink wrapper to `~/.local/bin/claude-vertex`             |
+| `just uninstall`         | Remove the symlink                                          |
+| `just clean`             | Remove the image                                            |
+| `just`                   | List recipes (default)                                      |
 
 ## Verifying you're on Vertex
 
@@ -126,6 +127,16 @@ Key points:
 - Claude's per-user state (`~/.claude/settings.json`, `shell-snapshots`, etc.)
   lives in host `~/.claude-vertex/` — kept separate from host `~/.claude` so
   the regular host `claude` is never touched.
+- **Pre-seeded config.** On first launch the entrypoint copies a baked-in
+  baseline from `/opt/claude-seed/` into the empty `~/.claude-vertex/`:
+  - `settings.json` with `permissions.defaultMode = bypassPermissions` and
+    `skipAutoPermissionPrompt = true`, so the container runs without
+    per-tool prompts.
+  - The [`superpowers`](https://github.com/obra/superpowers) plugin
+    pre-installed and enabled.
+  Seeding is idempotent (`rsync --ignore-existing`), so any edits you make
+  in `~/.claude-vertex/` survive future container starts. To re-seed from
+  scratch: `rm -rf ~/.claude-vertex && claude-vertex`.
 
 ## Configuration
 
@@ -136,8 +147,9 @@ The defaults match Vida's Confluence guide:
 | `CLAUDE_CODE_USE_VERTEX`         | `1`                              |
 | `ANTHROPIC_VERTEX_PROJECT_ID`    | `vertex-test-495715`             |
 | `CLOUD_ML_REGION`                | `us-east5`                       |
+| `ANTHROPIC_MODEL`                | `claude-opus-4-6`                |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | `claude-sonnet-4-6[1m]`          |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL`   | `claude-opus-4-7[1m]`            |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL`   | `claude-opus-4-6`                |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL`  | `claude-haiku-4-5@20251001`      |
 
 Override per-invocation:
@@ -148,7 +160,7 @@ ANTHROPIC_VERTEX_PROJECT_ID=other-project claude-vertex
 
 (Wrapper passes through any env you export to the container.)
 
-Override permanently: edit `Dockerfile`, `make rebuild`.
+Override permanently: edit `Dockerfile`, `just rebuild`.
 
 ## Troubleshooting
 
@@ -156,12 +168,12 @@ Override permanently: edit `Dockerfile`, `make rebuild`.
 may have a stale login. The container uses `~/.claude-vertex`, but the
 mount may be picking up old settings. Try `rm -rf ~/.claude-vertex && claude-vertex`.
 
-**`make auth` fails with browser/URL issues** — try
-`make reset-auth && make auth` to wipe and retry. If your gcloud account
+**`just auth` fails with browser/URL issues** — try
+`just reset-auth && just auth` to wipe and retry. If your gcloud account
 requires MFA in ways that block `--no-launch-browser`, fall back to mounting
 host gcloud creds (see "Alternative: host gcloud auth" below).
 
-**`make doctor` reports problems** — follow its hints. It catches the common
+**`just doctor` reports problems** — follow its hints. It catches the common
 "image not built", "auth volume empty", "host clock skewed" issues that make
 Vertex calls fail mysteriously.
 
@@ -171,7 +183,7 @@ Desktop maps UIDs, so this rarely matters there.
 
 ### Alternative: host gcloud auth
 
-If `make auth` is awkward, you can instead reuse host gcloud creds. Edit
+If `just auth` is awkward, you can instead reuse host gcloud creds. Edit
 `claude-vertex.sh` and replace:
 
 ```sh
@@ -189,9 +201,9 @@ then run `gcloud auth application-default login` on the host.
 ## Uninstall
 
 ```sh
-make uninstall      # remove `claude-vertex` symlink
-make clean          # remove the image
-make reset-auth     # wipe gcloud creds volume
+just uninstall      # remove `claude-vertex` symlink
+just clean          # remove the image
+just reset-auth     # wipe gcloud creds volume
 rm -rf ~/.claude-vertex
 ```
 
