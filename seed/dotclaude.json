@@ -14,11 +14,11 @@
       "command": "/usr/local/bin/mcp-atlassian",
       "args": [],
       "env": {
-        "JIRA_URL": "https://vidahealth.atlassian.net",
-        "JIRA_USERNAME": "chris.knaplund@vida.com",
+        "JIRA_URL": "${JIRA_URL}",
+        "JIRA_USERNAME": "${JIRA_USERNAME}",
         "JIRA_API_TOKEN": "${JIRA_API_TOKEN}",
-        "CONFLUENCE_URL": "https://vidahealth.atlassian.net/wiki",
-        "CONFLUENCE_USERNAME": "chris.knaplund@vida.com",
+        "CONFLUENCE_URL": "${CONFLUENCE_URL}",
+        "CONFLUENCE_USERNAME": "${CONFLUENCE_USERNAME}",
         "CONFLUENCE_API_TOKEN": "${CONFLUENCE_API_TOKEN}"
       }
     },

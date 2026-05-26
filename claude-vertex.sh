@@ -24,10 +24,14 @@ mkdir -p "$HOST_CFG"
 # host editor; values are passed to container via --env-file.
 if [[ ! -f "$HOST_ENV_FILE" ]]; then
     cat > "$HOST_ENV_FILE" <<'EOF'
-# Tokens for MCP servers used by claude-vertex.
-# Atlassian: https://id.atlassian.com/manage-profile/security/api-tokens
-# Context7:  https://context7.com (account -> API key)
+# Credentials + endpoints for MCP servers used by claude-vertex.
+# Atlassian API tokens: https://id.atlassian.com/manage-profile/security/api-tokens
+# Context7 API key:     https://context7.com (account -> API key)
+JIRA_URL=https://vidahealth.atlassian.net
+JIRA_USERNAME=
 JIRA_API_TOKEN=
+CONFLUENCE_URL=https://vidahealth.atlassian.net/wiki
+CONFLUENCE_USERNAME=
 CONFLUENCE_API_TOKEN=
 CONTEXT7_API_KEY=
 EOF

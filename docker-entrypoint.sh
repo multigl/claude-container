@@ -20,7 +20,12 @@ export GOOGLE_APPLICATION_CREDENTIALS="${GOOGLE_APPLICATION_CREDENTIALS:-${GCLOU
 export HOME=/home/claude
 
 mkdir -p "$DEST" "$GCLOUD_DIR"
-chown -R claude:claude /home/claude
+# Only chown the writable bind-mounts we actually need to own. A blanket
+# `chown -R /home/claude` would traverse host-mounted ~/.gitconfig and
+# ~/.ssh (mounted :ro) and fail with EROFS, killing the container under
+# set -e.
+chown claude:claude /home/claude
+chown -R claude:claude "$DEST" "$GCLOUD_DIR"
 
 if [[ -d "$SEED" ]]; then
     if command -v rsync >/dev/null 2>&1; then
