@@ -19,6 +19,15 @@ GCLOUD_DIR=/home/claude/.config/gcloud
 export GOOGLE_APPLICATION_CREDENTIALS="${GOOGLE_APPLICATION_CREDENTIALS:-${GCLOUD_DIR}/application_default_credentials.json}"
 export HOME=/home/claude
 
+# Remap the `claude` user to the host's UID/GID when the wrapper passes
+# them in. Lets writes into the $PWD bind-mount land with host ownership
+# on Linux engines (macOS Docker translates implicitly, so this is a no-op
+# there). Build-time UID is just a placeholder.
+if [[ -n "${HOST_UID:-}" && "$HOST_UID" != "$(id -u claude)" ]]; then
+    groupmod -g "${HOST_GID:-$HOST_UID}" claude 2>/dev/null || true
+    usermod -u "$HOST_UID" -g "${HOST_GID:-$HOST_UID}" claude
+fi
+
 mkdir -p "$DEST" "$GCLOUD_DIR"
 # Only chown the writable bind-mounts we actually need to own. A blanket
 # `chown -R /home/claude` would traverse host-mounted ~/.gitconfig and

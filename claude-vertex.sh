@@ -63,6 +63,8 @@ run_in_container() {
     fi
     docker run --rm "${extra_flags[@]}" \
         --env-file "$HOST_ENV_FILE" \
+        -e "HOST_UID=$(id -u)" \
+        -e "HOST_GID=$(id -g)" \
         -v "$PWD:/workspace" \
         -v "$GCLOUD_VOL:/home/claude/.config/gcloud" \
         -v "$HOST_CFG:/home/claude/.claude" \

@@ -187,13 +187,13 @@ If `just auth` is awkward, you can instead reuse host gcloud creds. Edit
 `claude-vertex.sh` and replace:
 
 ```sh
--v "$GCLOUD_VOL:/root/.config/gcloud"
+-v "$GCLOUD_VOL:/home/claude/.config/gcloud"
 ```
 
 with:
 
 ```sh
--v "$HOME/.config/gcloud:/root/.config/gcloud"
+-v "$HOME/.config/gcloud:/home/claude/.config/gcloud"
 ```
 
 then run `gcloud auth application-default login` on the host.
