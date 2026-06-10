@@ -53,6 +53,59 @@ fi
 if [[ -f "$SEED/dotclaude.json" ]] && [[ ! -s "$DOTCLAUDE" ]]; then
     cat "$SEED/dotclaude.json" > "$DOTCLAUDE"
 fi
+
+# Ensure the container's mcpServers block always matches the seed's --
+# container's command paths and server definitions are authoritative; host
+# only contributes credentials. Without this, an older ~/.claude-vertex.json
+# from a prior run could be missing the mcpServers skeleton entirely.
+if [[ -f "$SEED/dotclaude.json" ]] && command -v jq >/dev/null 2>&1; then
+    tmp="$(mktemp)"
+    jq -s '.[0] * {mcpServers: .[1].mcpServers}' \
+        "$DOTCLAUDE" "$SEED/dotclaude.json" > "$tmp" \
+        && cat "$tmp" > "$DOTCLAUDE"
+    rm -f "$tmp"
+fi
+
+# Graft MCP credentials from host ~/.claude.json (mounted read-only at
+# /home/claude/.host-claude.json by the wrapper) into the container's
+# ~/.claude.json. Only the `env` (stdio) and `headers` (http) sub-blocks of
+# servers that ALREADY exist in the container config are copied over -- the
+# container keeps its own `command` paths (host paths like /opt/homebrew/bin
+# don't exist in the image) and any servers the host has that the container
+# doesn't are ignored. Lets you keep MCP credentials in one place on the
+# host instead of duplicating them in ~/.claude-vertex.env. Re-applied every
+# launch so host edits propagate.
+HOST_DOTCLAUDE_RO=/home/claude/.host-claude.json
+if [[ -f "$HOST_DOTCLAUDE_RO" ]] && command -v jq >/dev/null 2>&1; then
+    if jq -e '.mcpServers' "$HOST_DOTCLAUDE_RO" >/dev/null 2>&1; then
+        tmp="$(mktemp)"
+        # For each server name present in BOTH files, deep-merge host's
+        # env/headers into container's entry (host values win on conflict).
+        jq -s '
+          .[0] as $c | .[1] as $h |
+          $c * {
+            mcpServers: (
+              $c.mcpServers
+              | with_entries(
+                  .key as $name | .value as $srv
+                  | .value = (
+                      $srv
+                      + (if $h.mcpServers[$name].env
+                         then {env: ((($srv.env // {}) + $h.mcpServers[$name].env))}
+                         else {} end)
+                      + (if $h.mcpServers[$name].headers
+                         then {headers: ((($srv.headers // {}) + $h.mcpServers[$name].headers))}
+                         else {} end)
+                    )
+                )
+            )
+          }
+        ' "$DOTCLAUDE" "$HOST_DOTCLAUDE_RO" > "$tmp" \
+            && cat "$tmp" > "$DOTCLAUDE"
+        rm -f "$tmp"
+    fi
+fi
+
 chown claude:claude "$DOTCLAUDE" 2>/dev/null || true
 chmod 0644 "$DOTCLAUDE" 2>/dev/null || true
 

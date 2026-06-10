@@ -61,6 +61,13 @@ run_in_container() {
     if [[ -d "$HOME/.ssh" ]]; then
         extra_flags+=(-v "$HOME/.ssh:/home/claude/.ssh:ro")
     fi
+    # Optional: host ~/.claude.json (the Anthropic-API claude's config) mounted
+    # read-only so the entrypoint can graft its `mcpServers` block into the
+    # container's separate ~/.claude.json. Keeps MCP credentials in one place
+    # on the host without leaking the rest of that file's state into the container.
+    if [[ -f "$HOME/.claude.json" ]]; then
+        extra_flags+=(-v "$HOME/.claude.json:/home/claude/.host-claude.json:ro")
+    fi
     docker run --rm "${extra_flags[@]}" \
         --env-file "$HOST_ENV_FILE" \
         -e "HOST_UID=$(id -u)" \
