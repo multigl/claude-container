@@ -1,92 +1,114 @@
-# claude-vertex
+# claude-vertex / claude-gateway
 
-Run [Claude Code](https://docs.anthropic.com/en/docs/claude-code) against
-Vida's **Vertex AI** project inside a Docker container — without disturbing
-the host's regular `claude` (Anthropic API), shell config, or gcloud setup.
+Run [Claude Code](https://docs.anthropic.com/en/docs/claude-code) inside a
+Docker container, routed through somewhere other than the public Anthropic API —
+without disturbing the host's regular `claude`, shell config, or gcloud setup.
+
+Two flavors build from this one repo:
+
+| Flavor          | Routes through            | Auth                                   |
+|-----------------|---------------------------|----------------------------------------|
+| **`vertex`**    | Vida's **Vertex AI**      | gcloud ADC (`CLAUDE_CODE_USE_VERTEX=1`)|
+| **`gateway`**   | an **LLM gateway** (LiteLLM) | `apiKeyHelper` + `ANTHROPIC_BASE_URL`  |
 
 ```sh
 cd ~/vida/dbt
-claude-vertex          # opens Claude Code, billed through Vida's Vertex project
+claude-vertex     # billed through Vida's Vertex project
+claude-gateway    # routed through your LLM gateway
 ```
 
 ## Why a container?
 
-- **Coexists with host `claude`.** Outside the container, normal `claude`
-  keeps hitting the Anthropic API. Inside, requests route through Vertex.
-- **Zero host changes.** No edits to `~/.zshrc`, no shared gcloud config,
-  no extra env vars in your shell.
-- **Pinned config.** Vida's Vertex project, region, and approved model IDs
-  are baked into the image — no interactive `/login` ritual on every machine.
+- **Coexists with host `claude`.** Outside the container, normal `claude` keeps
+  hitting the Anthropic API. Inside, requests route through Vertex or the gateway.
+- **Zero host changes.** No edits to `~/.zshrc`, no shared gcloud config, no extra
+  env vars in your shell.
+- **Pinned config.** Project, region, gateway URL, and model IDs are baked into
+  the image — no interactive `/login` ritual on every machine.
+- **Flavors don't collide.** Each flavor keeps its own state under
+  `~/.claude-vertex/` vs `~/.claude-gateway/`.
+
+## How the two flavors share one build
+
+The `Dockerfile` is multi-stage:
+
+```
+base ──┬─► vertex    (adds gcloud CLI + Vertex ENV)
+       └─► gateway   (adds ANTHROPIC_BASE_URL + apiKeyHelper, no gcloud)
+```
+
+`base` holds everything common (node, claude-code, uv + mcp-atlassian, the
+plugin seed, the `claude` user, the entrypoint). Each flavor stage adds only its
+own payload, so the gateway image carries no gcloud and the vertex image keeps
+its Vertex pins. Build a flavor with `docker build --target <flavor>`.
+
+The host wrapper is a single script, `claude-launcher.sh`, symlinked to both
+`claude-vertex` and `claude-gateway`; it picks its flavor from the name it was
+invoked as (override with `CLAUDE_FLAVOR=...`).
 
 ## Prerequisites
 
 1. **Docker Desktop** (or any Docker engine) running.
 2. **[`just`](https://github.com/casey/just)** — `brew install just`.
-3. **A `@vida.com` Google account** with access to the Vertex project
-   `vertex-test-495715`. (See the Confluence page
-   [Claude Code on Vertex-AI](https://vidahealth.atlassian.net/wiki/spaces/IT/pages/4534337542)
-   if you don't have access yet.)
-4. **`~/.local/bin` on `PATH`** (or set `BIN_DIR=/usr/local/bin` when installing).
-
-No host `gcloud` install required — the container ships its own.
+3. **`~/.local/bin` on `PATH`** (or set `BIN_DIR=/usr/local/bin` when installing).
+4. Flavor-specific:
+   - **vertex** — a `@vida.com` Google account with access to the Vertex project
+     `vertex-test-495715` (see Confluence:
+     [Claude Code on Vertex-AI](https://vidahealth.atlassian.net/wiki/spaces/IT/pages/4534337542)).
+     No host `gcloud` install required — the container ships its own.
+   - **gateway** — an executable key-helper script at
+     `~/.local/bin/litellm-key-helper` that prints a valid gateway token to
+     stdout, and the gateway's base URL.
 
 ## Quickstart
 
 ```sh
 git clone <this-repo> claude-vertex && cd claude-vertex
-
-just build      # build the image (~5 min first time)
-just auth       # one-time gcloud login (paste URL into browser, paste code back)
-just install    # symlink `claude-vertex` onto PATH
+just build-all      # build both images (shared base layer is cached)
+just install-all    # symlink claude-vertex AND claude-gateway onto PATH
 ```
 
-Then from any project:
+### Vertex
 
 ```sh
+just auth           # one-time gcloud login (paste URL into browser, paste code back)
 cd ~/vida/dbt
 claude-vertex
 ```
 
-That's it.
+### Gateway
+
+```sh
+# Bake your gateway URL (or override at runtime later):
+docker build --target gateway \
+    --build-arg GATEWAY_BASE_URL=https://gateway.internal \
+    -t claude-gateway:latest .
+
+# Ensure your key-helper is in place and executable:
+chmod +x ~/.local/bin/litellm-key-helper
+
+cd ~/vida/dbt
+claude-gateway      # first run seeds ~/.claude-gateway.env — fill it in if needed
+```
 
 ## Commands
 
+The wrapper auto-detects flavor from its name. `just` recipes default to
+`FLAVOR=vertex`; prefix `FLAVOR=gateway` to target the gateway flavor.
+
 | Command                  | What it does                                                |
 |--------------------------|-------------------------------------------------------------|
-| `claude-vertex`          | Run `claude` against current directory                      |
-| `claude-vertex shell`    | Drop into `bash` inside the container                       |
-| `claude-vertex -- <args>`| Pass flags through to `claude` (e.g. `claude-vertex -- --help`) |
-| `just build`             | Build image                                                 |
-| `just rebuild`           | Rebuild without cache                                       |
-| `just auth`              | One-time gcloud ADC login (creds saved to docker volume)    |
-| `just reset-auth`        | Wipe credentials volume; forces re-auth                     |
-| `just doctor`            | Self-check: docker, image, auth volume, host clock          |
-| `just install`           | Symlink wrapper to `~/.local/bin/claude-vertex`             |
-| `just uninstall`         | Remove the symlink                                          |
-| `just clean`             | Remove the image                                            |
+| `claude-vertex` / `claude-gateway` | Run `claude` against the current directory        |
+| `claude-<flavor> shell`  | Drop into `bash` inside the container                       |
+| `claude-<flavor> -- <args>` | Pass flags through to `claude`                           |
+| `just build`             | Build the `FLAVOR` image (`--target`)                       |
+| `just build-vertex` / `build-gateway` / `build-all` | Build a specific flavor / both |
+| `just install` / `install-all` | Symlink one / both flavor commands                   |
+| `just auth`              | One-time gcloud ADC login (vertex only)                     |
+| `just reset-auth`        | Wipe gcloud creds volume; forces re-auth                    |
+| `FLAVOR=gateway just doctor` | Self-check for the gateway flavor                       |
+| `just doctor`            | Self-check (vertex): docker, image, auth volume, ADC, PATH  |
 | `just`                   | List recipes (default)                                      |
-
-## Verifying you're on Vertex
-
-After launching `claude-vertex`, run `/status` inside Claude. You should see:
-
-```
-API provider:  Google Vertex AI
-GCP project:   vertex-test-495715
-Default region: us-east5
-Model:         Default (claude-sonnet-4-6[1m])
-```
-
-If `API provider` says `Anthropic API`, you're not on Vertex — see Troubleshooting.
-
-Stronger proof: open Google Cloud Console → Logging → query
-
-```
-resource.type="aiplatform.googleapis.com/Endpoint"
-protoPayload.authenticationInfo.principalEmail="<you>@vida.com"
-```
-
-Requests appearing here = traffic genuinely routed through Vida's GCP project.
 
 ## How it works
 
@@ -96,49 +118,60 @@ Requests appearing here = traffic genuinely routed through Vida's GCP project.
 │                                                              │
 │  $ claude          ───────► api.anthropic.com (unchanged)    │
 │                                                              │
-│  $ claude-vertex                                             │
-│        │                                                     │
-│        ▼                                                     │
-│  ┌────────────────────────────────────────────────────┐      │
-│  │ container: claude-vertex:latest                    │      │
-│  │   • claude-code (npm)                              │      │
-│  │   • gcloud CLI                                     │      │
-│  │   • env: CLAUDE_CODE_USE_VERTEX=1                  │      │
-│  │          ANTHROPIC_VERTEX_PROJECT_ID=vertex-test-… │      │
-│  │          CLOUD_ML_REGION=us-east5                  │      │
-│  │          ANTHROPIC_DEFAULT_*_MODEL=…               │      │
-│  │                                                    │      │
-│  │   mounts:                                          │      │
-│  │     $PWD                  → /workspace             │      │
-│  │     vol claude-vertex-gcloud → /root/.config/gcloud│      │
-│  │     ~/.claude-vertex      → /root/.claude          │      │
-│  │                                                    │      │
-│  │   ───────► us-east5-aiplatform.googleapis.com      │      │
-│  └────────────────────────────────────────────────────┘      │
+│  $ claude-vertex   ──► container claude-vertex:latest        │
+│        env: CLAUDE_CODE_USE_VERTEX=1 + Vertex pins           │
+│        creds: gcloud ADC in docker volume                   │
+│        ───────► us-east5-aiplatform.googleapis.com           │
+│                                                              │
+│  $ claude-gateway  ──► container claude-gateway:latest       │
+│        env: ANTHROPIC_BASE_URL=<gateway>                     │
+│        auth: apiKeyHelper = mounted ~/.local/bin/            │
+│              litellm-key-helper  (prints token)             │
+│        ───────► <gateway>/v1/messages                        │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Key points:
+Shared by both flavors:
 
-- Vertex env vars are **baked into the image** (see `Dockerfile`), so each
-  machine doesn't need to redo the interactive `/login` setup.
-- Auth (ADC) is stored in a **docker named volume** (`claude-vertex-gcloud`),
-  not under host `~/.config/gcloud`. Container-only.
-- Claude's per-user state (`~/.claude/settings.json`, `shell-snapshots`, etc.)
-  lives in host `~/.claude-vertex/` — kept separate from host `~/.claude` so
-  the regular host `claude` is never touched.
-- **Pre-seeded config.** On first launch the entrypoint copies a baked-in
-  baseline from `/opt/claude-seed/` into the empty `~/.claude-vertex/`:
-  - `settings.json` with `permissions.defaultMode = bypassPermissions` and
-    `skipAutoPermissionPrompt = true`, so the container runs without
-    per-tool prompts.
-  - The [`superpowers`](https://github.com/obra/superpowers) plugin
-    pre-installed and enabled.
-  Seeding is idempotent (`rsync --ignore-existing`), so any edits you make
-  in `~/.claude-vertex/` survive future container starts. To re-seed from
-  scratch: `rm -rf ~/.claude-vertex && claude-vertex`.
+- **Per-user state** (`settings.json`, `shell-snapshots`, …) lives in host
+  `~/.claude-<flavor>/`, separate from `~/.claude`, so the regular host `claude`
+  is never touched and the two flavors don't collide.
+- **Pre-seeded config.** On first launch the entrypoint copies the baked-in
+  baseline from `/opt/claude-seed/` (common bits from `seed-common/`, plus the
+  flavor's `settings.json`) into the empty `~/.claude-<flavor>/`. Seeding is
+  idempotent (`rsync --ignore-existing`), so edits survive future starts. Re-seed
+  from scratch: `rm -rf ~/.claude-<flavor>`.
+- **MCP servers** (atlassian, context7) are defined in `seed-common/dotclaude.json`.
+  Credentials can come from the flavor env file or be grafted read-only from your
+  host `~/.claude.json`.
 
-## Configuration
+## Gateway configuration
+
+The gateway flavor is a generic Anthropic-format client pointed at your gateway.
+
+| Var                              | Default                              | Notes                                   |
+|----------------------------------|--------------------------------------|-----------------------------------------|
+| `ANTHROPIC_BASE_URL`             | `https://your-gateway.example.com`   | Claude **appends `/v1/messages`** — set the base *without* it. Bake via `--build-arg GATEWAY_BASE_URL=…` or override at runtime. |
+| `ENABLE_TOOL_SEARCH`             | `true`                               | Re-enables MCP tool search, which Claude disables by default against a non-first-party base URL. |
+| `ANTHROPIC_MODEL` + `ANTHROPIC_DEFAULT_*_MODEL` | placeholders (`claude-opus-4-6`, …) | Set to the `model_name` strings your gateway exposes. |
+| `apiKeyHelper`                   | `/opt/claude/api-key-helper`         | The wrapper bind-mounts `~/.local/bin/litellm-key-helper` here (read-only). Override the host path with `CLAUDE_GATEWAY_KEY_HELPER`. |
+
+**Auth.** `apiKeyHelper` runs the mounted script; its stdout is sent as both
+`X-Api-Key` and `Authorization: Bearer`, so it works whichever header the gateway
+reads. Claude caches the token (default 5 min; tune
+`CLAUDE_CODE_API_KEY_HELPER_TTL_MS` in `~/.claude-gateway.env`) and re-runs the
+helper on an HTTP 401.
+
+**Env file (`~/.claude-gateway.env`).** The credential source of truth. Anything
+your key-helper reads from the environment (e.g. a LiteLLM master key) goes here —
+it is passed into the container via `--env-file` and is therefore visible to the
+helper subprocess. Vars set only in `settings.json` do **not** reach the helper.
+
+**Key-helper runtime deps.** The helper runs *inside* the gateway image, which has
+`bash`, `curl`, `jq`, and `python3` but **not** `gcloud`. If your helper shells out
+to a CLI that isn't present, add it to the `gateway` stage in the `Dockerfile`.
+
+## Vertex configuration
 
 The defaults match Vida's Confluence guide:
 
@@ -152,59 +185,49 @@ The defaults match Vida's Confluence guide:
 | `ANTHROPIC_DEFAULT_OPUS_MODEL`   | `claude-opus-4-6`                |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL`  | `claude-haiku-4-5@20251001`      |
 
-Override per-invocation:
+Override per-invocation by exporting env (the wrapper passes it through), or
+permanently by editing the `Dockerfile` and rebuilding.
 
-```sh
-ANTHROPIC_VERTEX_PROJECT_ID=other-project claude-vertex
-```
+## Verifying which provider you're on
 
-(Wrapper passes through any env you export to the container.)
+Run `/status` inside Claude:
 
-Override permanently: edit `Dockerfile`, `just rebuild`.
+- **vertex** → `API provider: Google Vertex AI`, `GCP project: vertex-test-495715`.
+  Stronger proof: Google Cloud Console → Logging →
+  `resource.type="aiplatform.googleapis.com/Endpoint"` filtered to your email.
+- **gateway** → the base URL should be your gateway, **not** `api.anthropic.com` or
+  Vertex. Confirm a request lands in your gateway's logs.
 
 ## Troubleshooting
 
-**`/status` still says "Anthropic API"** — host `~/.claude/settings.json`
-may have a stale login. The container uses `~/.claude-vertex`, but the
-mount may be picking up old settings. Try `rm -rf ~/.claude-vertex && claude-vertex`.
+**`/status` shows the wrong provider** — stale state under
+`~/.claude-<flavor>/`. Try `rm -rf ~/.claude-<flavor>` and relaunch.
 
-**`just auth` fails with browser/URL issues** — try
-`just reset-auth && just auth` to wipe and retry. If your gcloud account
-requires MFA in ways that block `--no-launch-browser`, fall back to mounting
-host gcloud creds (see "Alternative: host gcloud auth" below).
+**vertex: `just auth` fails with browser/URL issues** —
+`just reset-auth && just auth`.
 
-**`just doctor` reports problems** — follow its hints. It catches the common
-"image not built", "auth volume empty", "host clock skewed" issues that make
-Vertex calls fail mysteriously.
+**gateway: "key-helper missing or not executable"** — the wrapper refuses to run
+until `~/.local/bin/litellm-key-helper` exists and is executable (a missing path
+would otherwise be silently mounted as an empty directory). `chmod +x` it, or
+point `CLAUDE_GATEWAY_KEY_HELPER` elsewhere.
 
-**Permission errors writing to mounted dir** — the container runs as `root`.
-On Linux hosts, files it creates will be root-owned on disk. macOS Docker
-Desktop maps UIDs, so this rarely matters there.
+**gateway: 401 / auth loops** — run `claude-gateway shell` and execute
+`/opt/claude/api-key-helper` by hand; it must print a valid token to stdout with
+nothing else. Check that the vars it needs are set in `~/.claude-gateway.env`.
 
-### Alternative: host gcloud auth
+**`just doctor` reports problems** — follow its hints (per flavor).
 
-If `just auth` is awkward, you can instead reuse host gcloud creds. Edit
-`claude-vertex.sh` and replace:
-
-```sh
--v "$GCLOUD_VOL:/home/claude/.config/gcloud"
-```
-
-with:
-
-```sh
--v "$HOME/.config/gcloud:/home/claude/.config/gcloud"
-```
-
-then run `gcloud auth application-default login` on the host.
+**Permission errors writing to a mounted dir** — the container remaps to your
+host UID/GID on Linux; macOS Docker Desktop maps implicitly.
 
 ## Uninstall
 
 ```sh
-just uninstall      # remove `claude-vertex` symlink
-just clean          # remove the image
-just reset-auth     # wipe gcloud creds volume
-rm -rf ~/.claude-vertex
+just uninstall                  # remove both wrapper symlinks
+FLAVOR=gateway just clean       # remove gateway image
+just clean                      # remove vertex image
+just reset-auth                 # wipe gcloud creds volume
+rm -rf ~/.claude-vertex ~/.claude-gateway
 ```
 
 ## License

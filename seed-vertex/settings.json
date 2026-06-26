@@ -2,15 +2,14 @@
   "includeCoAuthoredBy": false,
   "theme": "dark",
   "permissions": {
-    "defaultMode": "bypassPermissions"
+    "defaultMode": "acceptEdits"
   },
-  "skipAutoPermissionPrompt": true,
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true,
     "caveman@caveman": true
   },
   "statusLine": {
     "type": "command",
-    "command": "bash /opt/claude-vertex/statusline.sh"
+    "command": "bash /opt/claude/statusline.sh"
   }
 }

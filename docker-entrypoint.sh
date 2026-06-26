@@ -13,10 +13,14 @@ DEST=/home/claude/.claude
 DOTCLAUDE=/home/claude/.claude.json
 GCLOUD_DIR=/home/claude/.config/gcloud
 
-# Path to the ADC file inside the bind-mounted gcloud config dir.
+# Vertex flavor only: point ADC at the bind-mounted gcloud config dir.
 # Exported here (not in the Dockerfile ENV) so Hadolint doesn't flag the
-# *_CREDENTIALS name pattern as a baked-in secret.
-export GOOGLE_APPLICATION_CREDENTIALS="${GOOGLE_APPLICATION_CREDENTIALS:-${GCLOUD_DIR}/application_default_credentials.json}"
+# *_CREDENTIALS name pattern as a baked-in secret. The gateway flavor leaves
+# CLAUDE_CODE_USE_VERTEX unset and skips all gcloud/ADC handling -- it auths
+# via the apiKeyHelper bind-mounted at /opt/claude/api-key-helper instead.
+if [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]]; then
+    export GOOGLE_APPLICATION_CREDENTIALS="${GOOGLE_APPLICATION_CREDENTIALS:-${GCLOUD_DIR}/application_default_credentials.json}"
+fi
 export HOME=/home/claude
 
 # Remap the `claude` user to the host's UID/GID when the wrapper passes
@@ -28,13 +32,15 @@ if [[ -n "${HOST_UID:-}" && "$HOST_UID" != "$(id -u claude)" ]]; then
     usermod -u "$HOST_UID" -g "${HOST_GID:-$HOST_UID}" claude
 fi
 
-mkdir -p "$DEST" "$GCLOUD_DIR"
+mkdir -p "$DEST"
+[[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && mkdir -p "$GCLOUD_DIR"
 # Only chown the writable bind-mounts we actually need to own. A blanket
 # `chown -R /home/claude` would traverse host-mounted ~/.gitconfig and
 # ~/.ssh (mounted :ro) and fail with EROFS, killing the container under
 # set -e.
 chown claude:claude /home/claude
-chown -R claude:claude "$DEST" "$GCLOUD_DIR"
+chown -R claude:claude "$DEST"
+[[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && chown -R claude:claude "$GCLOUD_DIR"
 
 if [[ -d "$SEED" ]]; then
     if command -v rsync >/dev/null 2>&1; then
@@ -109,7 +115,8 @@ fi
 chown claude:claude "$DOTCLAUDE" 2>/dev/null || true
 chmod 0644 "$DOTCLAUDE" 2>/dev/null || true
 
-exec gosu claude env \
-    HOME=/home/claude \
-    GOOGLE_APPLICATION_CREDENTIALS="$GOOGLE_APPLICATION_CREDENTIALS" \
-    "$@"
+exec_env=( HOME=/home/claude )
+if [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]]; then
+    exec_env+=( "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS" )
+fi
+exec gosu claude env "${exec_env[@]}" "$@"

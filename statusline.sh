@@ -1,6 +1,6 @@
 #!/bin/sh
-# Default claude-vertex status line -- robbyrussell-inspired.
-# Mounted over at /opt/claude-vertex/statusline.sh if the host has a
+# Default status line for both flavors -- robbyrussell-inspired.
+# Mounted over at /opt/claude/statusline.sh if the host has a
 # script at ~/.claude/statusline-command.sh; otherwise this fallback is used.
 input=$(cat)
 
