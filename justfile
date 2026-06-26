@@ -2,6 +2,7 @@ flavor     := env_var_or_default("FLAVOR", "vertex")
 image      := env_var_or_default("IMAGE", "claude-" + flavor + ":latest")
 bin_dir    := env_var_or_default("BIN_DIR", env_var("HOME") + "/.local/bin")
 gcloud_vol := env_var_or_default("GCLOUD_VOL", "claude-vertex-gcloud")
+okta_vol   := env_var_or_default("OKTA_VOL", "claude-gateway-okta")
 here       := justfile_directory()
 
 # Show available recipes
@@ -27,9 +28,26 @@ build-gateway:
 # Build both images (shared base layer is cached, so the second is cheap)
 build-all: build-vertex build-gateway
 
-# One-time gcloud ADC login (vertex only; saved to docker volume, not host)
+# Rebuild the vertex image without cache
+rebuild-vertex:
+    docker build --no-cache --target vertex -t claude-vertex:latest {{here}}
+
+# Rebuild the gateway image without cache
+rebuild-gateway:
+    docker build --no-cache --target gateway -t claude-gateway:latest {{here}}
+
+# Rebuild both images from scratch (base built no-cache once, then reused)
+rebuild-all:
+    docker build --no-cache --target vertex -t claude-vertex:latest {{here}}
+    docker build --target gateway -t claude-gateway:latest {{here}}
+
+# One-time login for {{flavor}} (gcloud ADC, or Okta device login) -> docker volume
 auth:
     CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh auth
+
+# Run the Python test suite for the gateway Okta helper
+test:
+    uv run pytest -q
 
 # Run `claude` against the current directory (uses {{flavor}})
 run:
@@ -38,6 +56,10 @@ run:
 # Open a bash shell inside the container
 shell:
     CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh shell
+
+# Overwrite host config's seeded files (settings + plugins) from the image
+reseed:
+    CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh reseed
 
 # Symlink wrapper to {{bin_dir}}/claude-{{flavor}}
 install:
@@ -58,9 +80,10 @@ install-all:
 uninstall:
     rm -f {{bin_dir}}/claude-vertex {{bin_dir}}/claude-gateway
 
-# Wipe the gcloud creds volume (vertex; forces re-auth)
+# Wipe the {{flavor}} credential volume (forces re-auth)
 reset-auth:
-    docker volume rm {{gcloud_vol}} || true
+    @if [ "{{flavor}}" = "vertex" ]; then docker volume rm {{gcloud_vol}} || true; \
+     else docker volume rm {{okta_vol}} || true; fi
 
 # Remove the {{flavor}} image
 clean:
@@ -85,10 +108,15 @@ doctor:
             && echo "  ok: ADC credentials present" \
             || echo "  MISSING ADC: run 'just auth'"; \
     else \
-        helper="${CLAUDE_GATEWAY_KEY_HELPER:-$HOME/.local/bin/litellm-key-helper}"; \
-        test -x "$helper" \
-            && echo "  ok: key-helper present: $helper" \
-            || echo "  MISSING: executable key-helper at $helper"; \
+        docker volume inspect {{okta_vol}} >/dev/null 2>&1 \
+            && docker run --rm -v {{okta_vol}}:/v alpine \
+                test -f /v/okta.json 2>/dev/null \
+            && echo "  ok: Okta token cache present" \
+            || echo "  MISSING: run 'FLAVOR=gateway just auth'"; \
+        env="$HOME/.claude-gateway.env"; \
+        if [ -f "$env" ] && grep -Eq '^OKTA_CLIENT_ID=.+' "$env"; then \
+            echo "  ok: OKTA_CLIENT_ID set in $env"; \
+        else echo "  MISSING: set OKTA_CLIENT_ID in $env"; fi; \
     fi
     @echo "== wrapper on PATH =="
     @command -v claude-{{flavor}} >/dev/null \

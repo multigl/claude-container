@@ -1,0 +1,13 @@
+[project]
+name = "claude-gateway-okta-helper"
+version = "0.1.0"
+description = "Okta OIDC id_token apiKeyHelper for the claude-gateway container"
+requires-python = ">=3.9"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["gateway"]

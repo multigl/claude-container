@@ -102,9 +102,9 @@ COPY --chown=claude:claude seed-vertex/ /opt/claude-seed/
 
 # ---------- gateway flavor ----------
 # Routes through an Anthropic-API-compatible LLM gateway (e.g. LiteLLM) via
-# ANTHROPIC_BASE_URL. Auth is the apiKeyHelper at /opt/claude/api-key-helper,
-# which the wrapper bind-mounts from the host. No gcloud, no Vertex --
-# CLAUDE_CODE_USE_VERTEX is deliberately left unset so requests use the
+# ANTHROPIC_BASE_URL. Auth is the baked apiKeyHelper at /opt/claude/api-key-helper
+# (an Okta device-login + id_token refresh helper, added below). No gcloud, no
+# Vertex -- CLAUDE_CODE_USE_VERTEX is deliberately left unset so requests use the
 # generic Anthropic format.
 FROM base AS gateway
 
@@ -115,12 +115,20 @@ FROM base AS gateway
 ARG GATEWAY_BASE_URL=https://your-gateway.example.com
 ENV ANTHROPIC_BASE_URL=${GATEWAY_BASE_URL} \
     ENABLE_TOOL_SEARCH=true \
-    ANTHROPIC_MODEL=claude-opus-4-6 \
+    ANTHROPIC_MODEL=claude-opus-4-8 \
     ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6 \
-    ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-6 \
+    ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8 \
     ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
 # Model IDs are placeholders -- set them to the model_name strings your gateway
 # exposes. ENABLE_TOOL_SEARCH=true re-enables MCP tool search, which Claude
 # disables by default against a non-first-party ANTHROPIC_BASE_URL.
 
 COPY --chown=claude:claude seed-gateway/ /opt/claude-seed/
+
+# Baked apiKeyHelper: mints/refreshes an Okta OIDC id_token (a JWT) that LiteLLM
+# validates. Its token cache lives in the claude-gateway-okta docker volume
+# mounted at ~/.local/share/litellm; `claude-gateway auth` runs it once
+# (--login-only) to complete the interactive device login. python3 (from base)
+# is the only dependency. settings.json points apiKeyHelper at this path.
+COPY gateway/okta_token_helper.py /opt/claude/api-key-helper
+RUN chmod 0755 /opt/claude/api-key-helper

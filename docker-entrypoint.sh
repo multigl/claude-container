@@ -41,14 +41,29 @@ mkdir -p "$DEST"
 chown claude:claude /home/claude
 chown -R claude:claude "$DEST"
 [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && chown -R claude:claude "$GCLOUD_DIR"
+# Gateway: the Okta token-cache volume arrives root-owned; hand it to claude so
+# the non-root apiKeyHelper can write its cache. Dir exists only when mounted.
+[[ -d /home/claude/.local/share/litellm ]] && chown -R claude:claude /home/claude/.local/share/litellm
 
+# Normally seed only fills in missing files (--ignore-existing / cp -n) so user
+# edits survive. CLAUDE_RESEED=1 (set by `claude-<flavor> reseed`) instead
+# OVERWRITES the seeded files with the image's current version -- used to push
+# updated settings/plugins to engineers who already have a config dir. Either
+# way dotclaude.json is excluded (handled separately below).
 if [[ -d "$SEED" ]]; then
+    if [[ -n "${CLAUDE_RESEED:-}" ]]; then
+        rsync_mode=()      # overwrite existing seeded files
+        cp_mode=(-r)
+    else
+        rsync_mode=(--ignore-existing)
+        cp_mode=(-rn)
+    fi
     if command -v rsync >/dev/null 2>&1; then
-        gosu claude rsync -a --ignore-existing \
+        gosu claude rsync -a "${rsync_mode[@]}" \
             --exclude=dotclaude.json \
             "$SEED"/ "$DEST"/
     else
-        gosu claude cp -rn "$SEED"/. "$DEST"/
+        gosu claude cp "${cp_mode[@]}" "$SEED"/. "$DEST"/
     fi
 fi
 

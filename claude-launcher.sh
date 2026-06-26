@@ -30,8 +30,9 @@ HOST_ENV_FILE="${CLAUDE_ENV_FILE:-$HOME/.claude-${FLAVOR}.env}"
 
 # vertex-only: named docker volume holding gcloud ADC credentials.
 GCLOUD_VOL="${CLAUDE_VERTEX_GCLOUD_VOL:-claude-vertex-gcloud}"
-# gateway-only: host apiKeyHelper script, bind-mounted into the container.
-HOST_KEY_HELPER="${CLAUDE_GATEWAY_KEY_HELPER:-$HOME/.local/bin/okta-token-helper}"
+# gateway-only: named docker volume holding the Okta id_token cache (the baked
+# apiKeyHelper's refresh_token/id_token store). Wipe with `reset-auth`.
+OKTA_VOL="${CLAUDE_GATEWAY_OKTA_VOL:-claude-gateway-okta}"
 
 mkdir -p "$HOST_CFG"
 # Ensure file exists so Docker bind-mounts it as a file, not a directory.
@@ -43,13 +44,14 @@ if [[ ! -f "$HOST_ENV_FILE" ]]; then
     {
         if [[ "$FLAVOR" == gateway ]]; then
             cat <<'EOF'
-# claude-gateway: vars your mounted key-helper (okta-token-helper) reads to
-# mint a gateway token. Passed into the container via --env-file and visible to
-# the helper. Set OKTA_CLIENT_ID; add any client secret / scope it needs.
+# claude-gateway: the baked Okta apiKeyHelper reads these to mint an id_token.
+# OKTA_ISSUER = Vida Org server (no /oauth2/<id>); OKTA_CLIENT_ID = the Native
+# app client_id (must equal LiteLLM's JWT_AUDIENCE). Run `claude-gateway auth`
+# once to complete the browser device login. Passed in via --env-file.
 OKTA_ISSUER=https://vida.okta.com
 OKTA_CLIENT_ID=
-CLAUDE_CODE_API_KEY_HELPER_TTL_MS=3600000
-# ANTHROPIC_BASE_URL=https://override-gateway.example.com   # optional runtime override
+CLAUDE_CODE_API_KEY_HELPER_TTL_MS=300000
+# ANTHROPIC_BASE_URL=https://litellm.local.sunbeam.network   # gateway endpoint override
 
 EOF
         fi
@@ -69,9 +71,11 @@ EOF
     chmod 600 "$HOST_ENV_FILE"
 fi
 
-# Vertex: ensure the gcloud creds volume exists.
+# Ensure the flavor's named credential volume exists.
 if [[ "$FLAVOR" == vertex ]]; then
     docker volume inspect "$GCLOUD_VOL" >/dev/null 2>&1 || docker volume create "$GCLOUD_VOL" >/dev/null
+else
+    docker volume inspect "$OKTA_VOL" >/dev/null 2>&1 || docker volume create "$OKTA_VOL" >/dev/null
 fi
 
 run_in_container() {
@@ -107,19 +111,15 @@ run_in_container() {
     if [[ "$FLAVOR" == vertex ]]; then
         extra_flags+=(-v "$GCLOUD_VOL:/home/claude/.config/gcloud")
     else
-        # gateway: bind-mount the host apiKeyHelper read-only. settings.json
-        # points apiKeyHelper at /opt/claude/api-key-helper. The :ro mount
-        # preserves the host file's executable bit. Guard against a missing
-        # path -- Docker would otherwise create an empty directory there and
-        # the helper would silently fail.
-        if [[ ! -x "$HOST_KEY_HELPER" ]]; then
-            echo "claude-gateway: key-helper missing or not executable:" >&2
-            echo "  $HOST_KEY_HELPER" >&2
-            echo "  place an executable script there, or set CLAUDE_GATEWAY_KEY_HELPER." >&2
-            exit 1
-        fi
-        extra_flags+=(-v "$HOST_KEY_HELPER:/opt/claude/api-key-helper:ro")
+        # gateway: mount the Okta token-cache volume where the baked apiKeyHelper
+        # writes (~/.local/share/litellm). Populated by `claude-gateway auth`,
+        # persisted across runs, wiped by `reset-auth`.
+        extra_flags+=(-v "$OKTA_VOL:/home/claude/.local/share/litellm")
     fi
+
+    # Forward the reseed flag so the entrypoint force-overwrites the seeded
+    # files (settings + plugins) instead of preserving existing ones.
+    [[ -n "${CLAUDE_RESEED:-}" ]] && extra_flags+=(-e "CLAUDE_RESEED=1")
 
     docker run --rm "${extra_flags[@]}" \
         --env-file "$HOST_ENV_FILE" \
@@ -134,17 +134,35 @@ run_in_container() {
 
 case "${1:-}" in
     auth)
-        # Container-only gcloud Application Default Credentials login (vertex).
-        # --no-launch-browser prints a URL; paste it in your host browser, then
-        # paste the verification code back. Creds persist in the volume.
-        if [[ "$FLAVOR" != vertex ]]; then
-            echo "auth: not applicable for the '$FLAVOR' flavor." >&2
-            echo "  gateway auth is the mounted key-helper: $HOST_KEY_HELPER" >&2
-            exit 1
-        fi
-        echo ">> running 'gcloud auth application-default login --no-launch-browser' inside container"
-        run_in_container gcloud auth application-default login --no-launch-browser
-        echo ">> done. credentials saved to docker volume: $GCLOUD_VOL"
+        case "$FLAVOR" in
+            vertex)
+                # gcloud Application Default Credentials login. --no-launch-browser
+                # prints a URL; paste it in your host browser, then paste the
+                # verification code back. Creds persist in the volume.
+                echo ">> running 'gcloud auth application-default login --no-launch-browser' inside container"
+                run_in_container gcloud auth application-default login --no-launch-browser
+                echo ">> done. credentials saved to docker volume: $GCLOUD_VOL"
+                ;;
+            gateway)
+                # Okta device-authorization login. The baked helper prints a
+                # verification URL to stderr; approve it in your host browser.
+                # --login-only populates the token cache without emitting a token.
+                echo ">> Okta device login inside container (approve in your browser)"
+                run_in_container /opt/claude/api-key-helper --login-only
+                echo ">> done. token cache saved to docker volume: $OKTA_VOL"
+                ;;
+            *)
+                echo "auth: not applicable for the '$FLAVOR' flavor." >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    reseed)
+        # Re-copy the image's seed payload (settings.json + plugins) over the
+        # host config, OVERWRITING those files with the image's current version.
+        # Other state (history, projects, shell-snapshots) is left untouched.
+        CLAUDE_RESEED=1 run_in_container true
+        echo ">> re-seeded $HOST_CFG from image (settings + plugins overwritten)"
         ;;
     shell)
         shift

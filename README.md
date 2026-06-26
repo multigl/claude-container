@@ -56,9 +56,9 @@ invoked as (override with `CLAUDE_FLAVOR=...`).
      `vertex-test-495715` (see Confluence:
      [Claude Code on Vertex-AI](https://vidahealth.atlassian.net/wiki/spaces/IT/pages/4534337542)).
      No host `gcloud` install required — the container ships its own.
-   - **gateway** — an executable key-helper script at
-     `~/.local/bin/litellm-key-helper` that prints a valid gateway token to
-     stdout, and the gateway's base URL.
+   - **gateway** — your gateway's base URL, plus an Okta **Native app**
+     `client_id` + `issuer`. A one-time browser device login mints the token;
+     no host helper script is needed (it's baked into the image).
 
 ## Quickstart
 
@@ -79,16 +79,16 @@ claude-vertex
 ### Gateway
 
 ```sh
-# Bake your gateway URL (or override at runtime later):
-docker build --target gateway \
-    --build-arg GATEWAY_BASE_URL=https://gateway.internal \
-    -t claude-gateway:latest .
+just build-gateway              # (optionally bake a default URL with
+                                #  docker build --target gateway
+                                #    --build-arg GATEWAY_BASE_URL=https://gateway.internal ...)
 
-# Ensure your key-helper is in place and executable:
-chmod +x ~/.local/bin/litellm-key-helper
+FLAVOR=gateway just auth        # seeds ~/.claude-gateway.env on first run
+$EDITOR ~/.claude-gateway.env   # set OKTA_CLIENT_ID + ANTHROPIC_BASE_URL
+FLAVOR=gateway just auth        # Okta device login — approve the URL in your browser
 
 cd ~/vida/dbt
-claude-gateway      # first run seeds ~/.claude-gateway.env — fill it in if needed
+claude-gateway                  # routed through the gateway
 ```
 
 ## Commands
@@ -103,9 +103,12 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 | `claude-<flavor> -- <args>` | Pass flags through to `claude`                           |
 | `just build`             | Build the `FLAVOR` image (`--target`)                       |
 | `just build-vertex` / `build-gateway` / `build-all` | Build a specific flavor / both |
+| `just rebuild-vertex` / `rebuild-gateway` / `rebuild-all` | No-cache rebuild of a flavor / both |
 | `just install` / `install-all` | Symlink one / both flavor commands                   |
-| `just auth`              | One-time gcloud ADC login (vertex only)                     |
-| `just reset-auth`        | Wipe gcloud creds volume; forces re-auth                    |
+| `just auth`              | One-time login — vertex: gcloud ADC; gateway: Okta device login |
+| `just reset-auth`        | Wipe the flavor's credential volume; forces re-auth         |
+| `just reseed`            | Overwrite the host config's seeded files (settings + plugins) from the image; preserves history |
+| `just test`              | Run the gateway Okta helper `pytest` suite                  |
 | `FLAVOR=gateway just doctor` | Self-check for the gateway flavor                       |
 | `just doctor`            | Self-check (vertex): docker, image, auth volume, ADC, PATH  |
 | `just`                   | List recipes (default)                                      |
@@ -125,8 +128,8 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 │                                                              │
 │  $ claude-gateway  ──► container claude-gateway:latest       │
 │        env: ANTHROPIC_BASE_URL=<gateway>                     │
-│        auth: apiKeyHelper = mounted ~/.local/bin/            │
-│              litellm-key-helper  (prints token)             │
+│        auth: baked apiKeyHelper mints an Okta id_token;      │
+│              refresh_token cached in a docker volume        │
 │        ───────► <gateway>/v1/messages                        │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -139,8 +142,10 @@ Shared by both flavors:
 - **Pre-seeded config.** On first launch the entrypoint copies the baked-in
   baseline from `/opt/claude-seed/` (common bits from `seed-common/`, plus the
   flavor's `settings.json`) into the empty `~/.claude-<flavor>/`. Seeding is
-  idempotent (`rsync --ignore-existing`), so edits survive future starts. Re-seed
-  from scratch: `rm -rf ~/.claude-<flavor>`.
+  idempotent (`rsync --ignore-existing`), so edits survive future starts. To push
+  updated seed files (e.g. a new `settings.json` or plugin) into an existing config
+  dir, `FLAVOR=<flavor> just reseed` overwrites just those files and keeps your
+  history/projects. Re-seed from scratch: `rm -rf ~/.claude-<flavor>`.
 - **MCP servers** (atlassian, context7) are defined in `seed-common/dotclaude.json`.
   Credentials can come from the flavor env file or be grafted read-only from your
   host `~/.claude.json`.
@@ -154,22 +159,29 @@ The gateway flavor is a generic Anthropic-format client pointed at your gateway.
 | `ANTHROPIC_BASE_URL`             | `https://your-gateway.example.com`   | Claude **appends `/v1/messages`** — set the base *without* it. Bake via `--build-arg GATEWAY_BASE_URL=…` or override at runtime. |
 | `ENABLE_TOOL_SEARCH`             | `true`                               | Re-enables MCP tool search, which Claude disables by default against a non-first-party base URL. |
 | `ANTHROPIC_MODEL` + `ANTHROPIC_DEFAULT_*_MODEL` | placeholders (`claude-opus-4-6`, …) | Set to the `model_name` strings your gateway exposes. |
-| `apiKeyHelper`                   | `/opt/claude/api-key-helper`         | The wrapper bind-mounts `~/.local/bin/litellm-key-helper` here (read-only). Override the host path with `CLAUDE_GATEWAY_KEY_HELPER`. |
+| `apiKeyHelper`                   | `/opt/claude/api-key-helper`         | Baked Okta helper (`gateway/okta_token_helper.py`, python3-only). Mints/refreshes an Okta **id_token** (JWT); token cache lives in the `claude-gateway-okta` docker volume. |
+| `OKTA_ISSUER`                    | `https://vida.okta.com`              | Okta **Org** authorization server (no `/oauth2/<id>`). Set in `~/.claude-gateway.env`. |
+| `OKTA_CLIENT_ID`                 | —                                    | The Okta **Native app** `client_id`; must equal LiteLLM's `JWT_AUDIENCE`. Set in `~/.claude-gateway.env`. |
 
-**Auth.** `apiKeyHelper` runs the mounted script; its stdout is sent as both
-`X-Api-Key` and `Authorization: Bearer`, so it works whichever header the gateway
-reads. Claude caches the token (default 5 min; tune
-`CLAUDE_CODE_API_KEY_HELPER_TTL_MS` in `~/.claude-gateway.env`) and re-runs the
-helper on an HTTP 401.
+**Auth (one-time device login).** `FLAVOR=gateway just auth` runs the baked helper
+with `--login-only`: it prints an Okta verification URL (approve it in your host
+browser), then stores a `refresh_token` in the `claude-gateway-okta` volume.
+Afterwards the helper serves a cached `id_token` and silently refreshes it (re-running
+on HTTP 401); Claude sends the `id_token` as the bearer. Refresh tokens expire after
+~7 days idle — re-login with `FLAVOR=gateway just reset-auth` then `just auth`.
 
-**Env file (`~/.claude-gateway.env`).** The credential source of truth. Anything
-your key-helper reads from the environment (e.g. a LiteLLM master key) goes here —
-it is passed into the container via `--env-file` and is therefore visible to the
-helper subprocess. Vars set only in `settings.json` do **not** reach the helper.
+**LiteLLM side (outside this repo).** The gateway JWT-validates the Org id_token:
+`JWT_ISSUER=https://vida.okta.com`, `JWT_AUDIENCE=<OKTA_CLIENT_ID>`, JWKS
+`https://vida.okta.com/oauth2/v1/keys`. (Vida's Okta has only the Org server, which
+issues ID tokens — not custom-API access tokens — hence the id_token-as-bearer design.)
 
-**Key-helper runtime deps.** The helper runs *inside* the gateway image, which has
-`bash`, `curl`, `jq`, and `python3` but **not** `gcloud`. If your helper shells out
-to a CLI that isn't present, add it to the `gateway` stage in the `Dockerfile`.
+**Env file (`~/.claude-gateway.env`).** Holds `OKTA_ISSUER`, `OKTA_CLIENT_ID`,
+`ANTHROPIC_BASE_URL`, and `CLAUDE_CODE_API_KEY_HELPER_TTL_MS`, passed into the
+container via `--env-file` so the helper reads them. Vars set only in `settings.json`
+do **not** reach the helper.
+
+**Helper tests.** `just test` runs the `pytest` suite in `tests/` against
+`gateway/okta_token_helper.py` (cache/refresh/rotation/device-login paths).
 
 ## Vertex configuration
 
@@ -206,14 +218,14 @@ Run `/status` inside Claude:
 **vertex: `just auth` fails with browser/URL issues** —
 `just reset-auth && just auth`.
 
-**gateway: "key-helper missing or not executable"** — the wrapper refuses to run
-until `~/.local/bin/litellm-key-helper` exists and is executable (a missing path
-would otherwise be silently mounted as an empty directory). `chmod +x` it, or
-point `CLAUDE_GATEWAY_KEY_HELPER` elsewhere.
+**gateway: "not a terminal; run okta-token-helper once to log in"** — you haven't
+done the device login. Run `FLAVOR=gateway just auth` and approve the URL in your
+browser. `FLAVOR=gateway just doctor` confirms the token cache exists.
 
-**gateway: 401 / auth loops** — run `claude-gateway shell` and execute
-`/opt/claude/api-key-helper` by hand; it must print a valid token to stdout with
-nothing else. Check that the vars it needs are set in `~/.claude-gateway.env`.
+**gateway: 401 / auth loops** — the refresh token is likely expired or revoked.
+Re-login: `FLAVOR=gateway just reset-auth` then `FLAVOR=gateway just auth`. To
+inspect, `claude-gateway shell` then run `/opt/claude/api-key-helper` by hand — it
+prints the `id_token` to stdout and diagnostics to stderr.
 
 **`just doctor` reports problems** — follow its hints (per flavor).
 

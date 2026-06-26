@@ -2,3 +2,9 @@
 *.log
 .idea/
 .vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
