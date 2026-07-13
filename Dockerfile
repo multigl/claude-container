@@ -89,11 +89,7 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
 
 ENV CLAUDE_CODE_USE_VERTEX=1 \
     ANTHROPIC_VERTEX_PROJECT_ID=vertex-test-495715 \
-    CLOUD_ML_REGION=us-east5 \
-    ANTHROPIC_MODEL=claude-opus-4-6 \
-    ANTHROPIC_DEFAULT_SONNET_MODEL="claude-sonnet-4-6[1m]" \
-    ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-6 \
-    ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5@20251001
+    CLOUD_ML_REGION=us 
 # GOOGLE_APPLICATION_CREDENTIALS is exported by the entrypoint at runtime
 # rather than baked into the image (avoids the Hadolint
 # SecretsUsedInArgOrEnv warning on the *_CREDENTIALS name pattern).
