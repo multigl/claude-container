@@ -17,6 +17,17 @@ build:
 rebuild:
     docker build --no-cache --target {{flavor}} -t {{image}} {{here}}
 
+# Update claude-code: rebuild {{flavor}} pinned to the latest published version.
+# The container's claude-code is deliberately non-self-updating (pinned + ephemeral
+# + non-root), so this is how you move it forward. Resolves latest from npm and
+# passes it as CLAUDE_CODE_VERSION; the changed build arg busts just that layer.
+# Override the target version with the CLAUDE_CODE_VERSION env var.
+update:
+    ver="${CLAUDE_CODE_VERSION:-$(npm view @anthropic-ai/claude-code version)}"; \
+    docker build --target {{flavor}} --build-arg CLAUDE_CODE_VERSION="$ver" \
+        -t {{image}} {{here}}; \
+    echo ">> built {{image}} with claude-code $ver"
+
 # Build the vertex image
 build-vertex:
     docker build --target vertex -t claude-vertex:latest {{here}}
@@ -96,7 +107,7 @@ doctor:
         || { echo "  FAIL: docker not running"; exit 1; }
     @echo "== image ({{flavor}}) =="
     @docker image inspect {{image}} >/dev/null 2>&1 \
-        && echo "  ok: {{image}} present" \
+        && echo "  ok: {{image}} present (claude-code $(docker run --rm {{image}} claude --version 2>/dev/null || echo '?'))" \
         || echo "  MISSING: run 'just build' (FLAVOR={{flavor}})"
     @echo "== auth ({{flavor}}) =="
     @if [ "{{flavor}}" = "vertex" ]; then \

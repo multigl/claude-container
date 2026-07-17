@@ -27,6 +27,14 @@ IMAGE="${CLAUDE_IMAGE:-claude-${FLAVOR}:latest}"
 HOST_CFG="${CLAUDE_HOME:-$HOME/.claude-${FLAVOR}}"
 HOST_DOTCLAUDE="${HOST_CFG}.json"
 HOST_ENV_FILE="${CLAUDE_ENV_FILE:-$HOME/.claude-${FLAVOR}.env}"
+# Optional: extra host dirs to expose inside the container, beyond $PWD. One host
+# path per line (blank / #-comment lines ignored); append ` :rw` to a line to make
+# that mount writable (default read-only). Each is bind-mounted at
+# /mnt/approved/<basename>, reachable by Claude's native file tools.
+HOST_MOUNTS_FILE="${CLAUDE_MOUNTS_FILE:-$HOME/.claude-${FLAVOR}.mounts}"
+# Seeded, editable git identity used inside the container (mounted ro and included
+# by the container's generated ~/.gitconfig). Sibling to the .env/.json host files.
+HOST_GITCONFIG="${CLAUDE_GITCONFIG:-$HOME/.claude-${FLAVOR}.gitconfig}"
 
 # vertex-only: named docker volume holding gcloud ADC credentials.
 GCLOUD_VOL="${CLAUDE_VERTEX_GCLOUD_VOL:-claude-vertex-gcloud}"
@@ -71,6 +79,30 @@ EOF
     chmod 600 "$HOST_ENV_FILE"
 fi
 
+# Seed the git identity file once, prefilled from the host's effective identity
+# resolved in $PWD (so folder-scoped includeIf values are honored). Editable and
+# persistent thereafter; delete it to re-seed. gpgsign is off by default (the
+# signing blocks ship commented out).
+if [[ ! -f "$HOST_GITCONFIG" ]]; then
+    _git_name="$(git -C "$PWD" config --get user.name  2>/dev/null || true)"
+    _git_email="$(git -C "$PWD" config --get user.email 2>/dev/null || true)"
+    cat > "$HOST_GITCONFIG" <<EOF
+# claude-${FLAVOR}: git identity used INSIDE the container. Prefilled from your
+# host git config; edit freely (persists across sessions; delete to re-seed).
+# To enable SSH commit signing: set signingkey to your SSH signing public key,
+# uncomment the [gpg]/[commit] blocks, and launch with CLAUDE_FORWARD_SSH_AGENT=1.
+[user]
+    name = ${_git_name}
+    email = ${_git_email}
+    # signingkey = ssh-ed25519 AAAA...
+# [gpg]
+#     format = ssh
+# [commit]
+#     gpgsign = true
+EOF
+    chmod 600 "$HOST_GITCONFIG"
+fi
+
 # Ensure the flavor's named credential volume exists.
 if [[ "$FLAVOR" == vertex ]]; then
     docker volume inspect "$GCLOUD_VOL" >/dev/null 2>&1 || docker volume create "$GCLOUD_VOL" >/dev/null
@@ -88,10 +120,34 @@ run_in_container() {
     if [[ -f "$host_statusline" ]]; then
         extra_flags+=(-v "$host_statusline:/opt/claude/statusline.sh:ro")
     fi
-    # Optional: host git identity + global config so commits inside the
-    # container are attributed to you. Read-only; container can't edit host.
-    if [[ -f "$HOME/.gitconfig" ]]; then
-        extra_flags+=(-v "$HOME/.gitconfig:/home/claude/.gitconfig:ro")
+    # Seeded git identity, mounted ro; the entrypoint's generated ~/.gitconfig
+    # includes it. Replaces the old direct ~/.gitconfig mount (which dragged in
+    # host-only paths + includeIf conditions that never match container paths).
+    if [[ -f "$HOST_GITCONFIG" ]]; then
+        extra_flags+=(-v "$HOST_GITCONFIG:/home/claude/.gitconfig-identity:ro")
+    fi
+    # GitHub token resolved from the host (gh stores it in the OS keyring by
+    # default, so ~/.config/gh alone lacks it). Injected in-memory per run; never
+    # written to disk. gh + its credential helper honor GH_TOKEN.
+    if command -v gh >/dev/null 2>&1; then
+        _gh_token="$(gh auth token 2>/dev/null || true)"
+        [[ -n "$_gh_token" ]] && extra_flags+=(-e "GH_TOKEN=$_gh_token")
+    fi
+    # Opt-in SSH agent forwarding: enables SSH commit signing + SSH git push using
+    # the host agent (e.g. 1Password). Set CLAUDE_FORWARD_SSH_AGENT=1 in your shell.
+    # macOS/Docker Desktop can't bind-mount a host socket directly -- it uses the
+    # synthesized /run/host-services/ssh-auth.sock (requires the host to have run
+    # `launchctl setenv SSH_AUTH_SOCK <1p-agent.sock>` before Docker Desktop start).
+    if [[ -n "${CLAUDE_FORWARD_SSH_AGENT:-}" ]]; then
+        if [[ "$(uname)" == "Darwin" ]]; then
+            extra_flags+=(--mount "type=bind,src=/run/host-services/ssh-auth.sock,target=/ssh-agent")
+            extra_flags+=(-e "SSH_AUTH_SOCK=/ssh-agent")
+        elif [[ -n "${SSH_AUTH_SOCK:-}" ]]; then
+            extra_flags+=(-v "$SSH_AUTH_SOCK:/ssh-agent")
+            extra_flags+=(-e "SSH_AUTH_SOCK=/ssh-agent")
+        else
+            echo ">> CLAUDE_FORWARD_SSH_AGENT set but SSH_AUTH_SOCK is empty; skipping agent forward" >&2
+        fi
     fi
     # Optional: host ssh keys + known_hosts so `git push` over SSH works.
     # Read-only; new host fingerprints can't be saved across runs.
@@ -120,6 +176,40 @@ run_in_container() {
     # Forward the reseed flag so the entrypoint force-overwrites the seeded
     # files (settings + plugins) instead of preserving existing ones.
     [[ -n "${CLAUDE_RESEED:-}" ]] && extra_flags+=(-e "CLAUDE_RESEED=1")
+
+    # Optional extra bind mounts from $HOST_MOUNTS_FILE. Each approved host dir is
+    # mounted at /mnt/approved/<basename> so Claude's native tools can reach it.
+    # Read-only unless the line ends in ` :rw`. Missing dirs and basename
+    # collisions are skipped with a warning so a stale entry never blocks launch.
+    if [[ -f "$HOST_MOUNTS_FILE" ]]; then
+        local seen_names=" "
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%%#*}"                       # strip trailing comments
+            line="${line#"${line%%[![:space:]]*}"}"  # ltrim
+            line="${line%"${line##*[![:space:]]}"}"  # rtrim
+            [[ -z "$line" ]] && continue
+            local mode=ro path="$line"
+            if [[ "$line" == *:rw ]]; then
+                mode=rw
+                path="${line%:rw}"
+                path="${path%"${path##*[![:space:]]}"}"  # rtrim before :rw
+            fi
+            # Expand a leading ~ to $HOME.
+            [[ "$path" == "~"* ]] && path="${HOME}${path#\~}"
+            if [[ ! -d "$path" ]]; then
+                echo ">> skip mount: not a directory: $path" >&2
+                continue
+            fi
+            local name
+            name="$(basename "$path")"
+            if [[ "$seen_names" == *" $name "* ]]; then
+                echo ">> skip mount: duplicate basename '$name' ($path)" >&2
+                continue
+            fi
+            seen_names+="$name "
+            extra_flags+=(-v "$path:/mnt/approved/$name:$mode")
+        done < "$HOST_MOUNTS_FILE"
+    fi
 
     docker run --rm "${extra_flags[@]}" \
         --env-file "$HOST_ENV_FILE" \

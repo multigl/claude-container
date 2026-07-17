@@ -130,6 +130,30 @@ fi
 chown claude:claude "$DOTCLAUDE" 2>/dev/null || true
 chmod 0644 "$DOTCLAUDE" 2>/dev/null || true
 
+# --- git identity + gh credential helper -------------------------------------
+# Write a container-owned ~/.gitconfig that INCLUDES the launcher-seeded, ro
+# identity file (mounted at ~/.gitconfig-identity). git ignores the include if the
+# path is absent, so this is safe when no identity was seeded. Signing intent
+# (gpg.format/signingkey/commit.gpgsign) lives in the identity file and is off
+# unless the engineer enables it there.
+GITCONFIG=/home/claude/.gitconfig
+cat > "$GITCONFIG" <<'EOF'
+[include]
+    path = /home/claude/.gitconfig-identity
+[safe]
+    directory = *
+[init]
+    defaultBranch = main
+EOF
+chown claude:claude "$GITCONFIG"
+
+# Register gh as the HTTPS credential helper when a token was injected (GH_TOKEN
+# is passed in by the wrapper). HTTPS-scoped only -- SSH remotes are unaffected.
+if [[ -n "${GH_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
+    gosu claude env HOME=/home/claude GH_TOKEN="$GH_TOKEN" gh auth setup-git 2>/dev/null || true
+fi
+# -----------------------------------------------------------------------------
+
 exec_env=( HOME=/home/claude )
 if [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]]; then
     exec_env+=( "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS" )

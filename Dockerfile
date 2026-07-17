@@ -5,7 +5,14 @@
 # own payload (vertex gets gcloud; gateway gets the gateway ENV + apiKeyHelper).
 FROM node:20-bookworm-slim AS base
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    DISABLE_AUTOUPDATER=1
+# DISABLE_AUTOUPDATER: the container is version-pinned and ephemeral (`docker run
+# --rm`). Self-update can't work here -- claude-code is `npm install -g`'d as root
+# but runs as the non-root `claude` user (EACCES on the global prefix), and any
+# in-place update would be discarded on exit anyway. So updates happen by rebuild
+# (`just update`), not in-container. Turning the checker off avoids the failing
+# background update attempt / nag on every launch.
 
 # Base packages shared by both flavors. google-cloud-cli is NOT here -- it is
 # Vertex-only and lives in the vertex stage.
@@ -14,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         gnupg \
         git \
+        openssh-client \
         python3 \
         less \
         ripgrep \
@@ -22,7 +30,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         jq \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code
+# GitHub CLI (gh). Official apt repo + keyring. Shared by both flavors: used for
+# `gh pr`/`gh api` and as an HTTPS git credential helper (see entrypoint). Auth is
+# supplied at runtime via GH_TOKEN (resolved from the host keyring by the wrapper).
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Pinned via build arg. Defaults to `latest` so a plain `just build` tracks the
+# newest release; `just update` resolves the current latest and passes it here so
+# the built image records an exact, reproducible version (and the changed arg
+# busts this layer's cache without a full --no-cache rebuild).
+ARG CLAUDE_CODE_VERSION=latest
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # uv + mcp-atlassian. uv tool install drops the executable in
 # UV_TOOL_BIN_DIR; pointed at /usr/local/bin so the seed config can

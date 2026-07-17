@@ -150,6 +150,36 @@ Shared by both flavors:
   Credentials can come from the flavor env file or be grafted read-only from your
   host `~/.claude.json`.
 
+## Git & GitHub inside the container
+
+The container uses your **host** git/GitHub setup — no second login.
+
+- **Identity.** On first launch the wrapper seeds `~/.claude-<flavor>.gitconfig`,
+  prefilled from your host `git config` (resolved in the repo dir, so folder-scoped
+  `includeIf` values are honored). Edit it freely; it persists. Delete it to
+  re-seed. It's mounted read-only and included by the container's generated
+  `~/.gitconfig`. (Your host `~/.gitconfig` is **not** mounted directly — its
+  `includeIf gitdir:` conditions and host-only paths don't apply in the container.)
+- **`gh` + HTTPS push.** The wrapper resolves your GitHub token with
+  `gh auth token` (works even when gh stores it in the OS keyring) and injects it
+  as `GH_TOKEN`. `gh pr`/`gh api` work, and `gh` is registered as the HTTPS git
+  credential helper so HTTPS `git push` works. SSH remotes are unaffected.
+- **Commit signing is OFF by default** (avoids GPG/YubiKey/agent friction). To sign
+  with SSH: in `~/.claude-<flavor>.gitconfig` set `signingkey` to your SSH signing
+  public key and uncomment the `[gpg] format = ssh` and `[commit] gpgsign = true`
+  blocks, then launch with the agent forwarded (below).
+- **SSH agent forwarding (opt-in)** — for SSH signing and SSH `git push`:
+
+  ```sh
+  CLAUDE_FORWARD_SSH_AGENT=1 claude-vertex
+  ```
+
+  - **Linux:** forwards `$SSH_AUTH_SOCK` directly.
+  - **macOS/Docker Desktop:** uses the synthesized `/run/host-services/ssh-auth.sock`.
+    **Prerequisite:** run `launchctl setenv SSH_AUTH_SOCK "$SSH_AUTH_SOCK"` (pointing
+    at your 1Password agent socket) and restart Docker Desktop, so launchd exposes
+    the agent to Docker. Verify inside the container with `ssh-add -l`.
+
 ## Gateway configuration
 
 The gateway flavor is a generic Anthropic-format client pointed at your gateway.
