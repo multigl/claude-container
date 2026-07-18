@@ -24,17 +24,44 @@ esac
 FLAVOR="${CLAUDE_FLAVOR:-$FLAVOR}"
 
 IMAGE="${CLAUDE_IMAGE:-claude-${FLAVOR}:latest}"
-HOST_CFG="${CLAUDE_HOME:-$HOME/.claude-${FLAVOR}}"
-HOST_DOTCLAUDE="${HOST_CFG}.json"
-HOST_ENV_FILE="${CLAUDE_ENV_FILE:-$HOME/.claude-${FLAVOR}.env}"
-# Optional: extra host dirs to expose inside the container, beyond $PWD. One host
-# path per line (blank / #-comment lines ignored); append ` :rw` to a line to make
-# that mount writable (default read-only). Each is bind-mounted at
-# /mnt/approved/<basename>, reachable by Claude's native file tools.
-HOST_MOUNTS_FILE="${CLAUDE_MOUNTS_FILE:-$HOME/.claude-${FLAVOR}.mounts}"
-# Seeded, editable git identity used inside the container (mounted ro and included
-# by the container's generated ~/.gitconfig). Sibling to the .env/.json host files.
-HOST_GITCONFIG="${CLAUDE_GITCONFIG:-$HOME/.claude-${FLAVOR}.gitconfig}"
+# --- host-side paths (XDG split) --------------------------------------------
+# Config (hand-edited, back-up-able) lives under XDG_CONFIG_HOME; state
+# (machine-managed, disposable) under XDG_STATE_HOME. Per-flavor subdir in each.
+NS="vida-claude-container"
+CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/${NS}/${FLAVOR}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${NS}/${FLAVOR}"
+
+# State: the .claude dir (mounted to the container's ~/.claude) + .claude.json.
+# No per-flavor override knob -- relocation follows XDG_STATE_HOME only.
+HOST_CFG="${STATE_DIR}/claude"
+HOST_DOTCLAUDE="${STATE_DIR}/claude.json"
+
+# Config: env / mounts / gitconfig / settings override. Each keeps an escape-hatch
+# override env var so it can be pointed into a dotfiles repo. (See README for the
+# mounts-file format and the settings.override.json semantics.)
+HOST_ENV_FILE="${CLAUDE_ENV_FILE:-${CFG_DIR}/env}"
+HOST_MOUNTS_FILE="${CLAUDE_MOUNTS_FILE:-${CFG_DIR}/mounts}"
+HOST_GITCONFIG="${CLAUDE_GITCONFIG:-${CFG_DIR}/gitconfig}"
+HOST_SETTINGS="${CLAUDE_SETTINGS:-${CFG_DIR}/settings.override.json}"
+
+# --print-paths: emit resolved paths and exit BEFORE any side effect (mkdir,
+# seeding, volume creation, docker). Used by tests/test_launcher_paths.sh.
+if [[ "${1:-}" == "--print-paths" ]]; then
+    cat <<EOF
+FLAVOR=$FLAVOR
+CFG_DIR=$CFG_DIR
+STATE_DIR=$STATE_DIR
+HOST_CFG=$HOST_CFG
+HOST_DOTCLAUDE=$HOST_DOTCLAUDE
+HOST_ENV_FILE=$HOST_ENV_FILE
+HOST_MOUNTS_FILE=$HOST_MOUNTS_FILE
+HOST_GITCONFIG=$HOST_GITCONFIG
+HOST_SETTINGS=$HOST_SETTINGS
+IMAGE=$IMAGE
+EOF
+    exit 0
+fi
+# ----------------------------------------------------------------------------
 
 # vertex-only: named docker volume holding gcloud ADC credentials.
 GCLOUD_VOL="${CLAUDE_VERTEX_GCLOUD_VOL:-claude-vertex-gcloud}"
@@ -42,7 +69,7 @@ GCLOUD_VOL="${CLAUDE_VERTEX_GCLOUD_VOL:-claude-vertex-gcloud}"
 # apiKeyHelper's refresh_token/id_token store). Wipe with `reset-auth`.
 OKTA_VOL="${CLAUDE_GATEWAY_OKTA_VOL:-claude-gateway-okta}"
 
-mkdir -p "$HOST_CFG"
+mkdir -p "$CFG_DIR" "$HOST_CFG"
 # Ensure file exists so Docker bind-mounts it as a file, not a directory.
 [[ -f "$HOST_DOTCLAUDE" ]] || : > "$HOST_DOTCLAUDE"
 
