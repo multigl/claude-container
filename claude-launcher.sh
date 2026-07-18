@@ -153,6 +153,11 @@ run_in_container() {
     if [[ -f "$HOST_GITCONFIG" ]]; then
         extra_flags+=(-v "$HOST_GITCONFIG:/home/claude/.gitconfig-identity:ro")
     fi
+    # Settings override: deep-merged onto the seeded settings.json by the
+    # entrypoint. Mounted ro only when it exists -- absent means "no deltas".
+    if [[ -f "$HOST_SETTINGS" ]]; then
+        extra_flags+=(-v "$HOST_SETTINGS:/home/claude/.claude/settings.override.json:ro")
+    fi
     # GitHub token resolved from the host (gh stores it in the OS keyring by
     # default, so ~/.config/gh alone lacks it). Injected in-memory per run; never
     # written to disk. gh + its credential helper honor GH_TOKEN.
