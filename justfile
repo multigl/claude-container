@@ -73,47 +73,6 @@ shell:
 reseed:
     CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh reseed
 
-# One-time: move the legacy shared projects/-workspace bucket to THIS repo's
-# per-project key. Run once, FROM the repo that owns that history. Refuses only
-# if the target already holds data (the launcher pre-creates an empty target on
-# every normal run, so an empty one is expected and is cleared out of the way).
-migrate-memory:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh --print-paths)"
-    STATE_DIR="$(printf '%s\n' "$paths" | sed -n 's/^STATE_DIR=//p')"
-    HOST_PROJECT_DIR="$(printf '%s\n' "$paths" | sed -n 's/^HOST_PROJECT_DIR=//p')"
-    legacy="$STATE_DIR/projects/-workspace"
-    if [ ! -d "$legacy" ]; then echo "no legacy bucket at $legacy; nothing to migrate"; exit 0; fi
-    if [ -d "$HOST_PROJECT_DIR" ] && [ -n "$(ls -A "$HOST_PROJECT_DIR" 2>/dev/null)" ]; then
-        echo "target exists and is non-empty: $HOST_PROJECT_DIR; refusing to overwrite"; exit 1
-    fi
-    # Remove the empty target the launcher pre-creates so mv renames the legacy
-    # bucket into place instead of nesting it inside.
-    rmdir "$HOST_PROJECT_DIR" 2>/dev/null || true
-    mkdir -p "$(dirname "$HOST_PROJECT_DIR")"
-    mv "$legacy" "$HOST_PROJECT_DIR"
-    echo "migrated $legacy -> $HOST_PROJECT_DIR"
-
-# Rebuild the derived MEMORY.md index for THIS repo's project memory + the global
-# tier (host-side; no container needed). Normally the entrypoint does this each
-# launch -- use this for manual repair.
-rebuild-memory-index:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh --print-paths)"
-    HOST_CFG="$(printf '%s\n' "$paths" | sed -n 's/^HOST_CFG=//p')"
-    HOST_PROJECT_DIR="$(printf '%s\n' "$paths" | sed -n 's/^HOST_PROJECT_DIR=//p')"
-    if [ -d "$HOST_PROJECT_DIR/memory" ]; then
-        {{here}}/bin/rebuild-memory-index.sh "$HOST_PROJECT_DIR/memory"
-        echo "rebuilt: $HOST_PROJECT_DIR/memory/MEMORY.md"
-    else
-        echo "no project memory dir yet"
-    fi
-    mkdir -p "$HOST_CFG/memory-global"
-    {{here}}/bin/rebuild-memory-index.sh "$HOST_CFG/memory-global"
-    echo "rebuilt: $HOST_CFG/memory-global/MEMORY.md"
-
 # Symlink wrapper to {{bin_dir}}/claude-{{flavor}}
 install:
     mkdir -p {{bin_dir}}
@@ -178,11 +137,9 @@ doctor:
     @echo "== memory ({{flavor}}) =="
     @paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh --print-paths)"; \
         STATE_DIR="$(printf '%s\n' "$paths" | sed -n 's/^STATE_DIR=//p')"; \
-        HOST_PROJECT_DIR="$(printf '%s\n' "$paths" | sed -n 's/^HOST_PROJECT_DIR=//p')"; \
-        PROJECT_KEY="$(printf '%s\n' "$paths" | sed -n 's/^PROJECT_KEY=//p')"; \
-        echo "  project key: $PROJECT_KEY"; \
-        echo "  project dir: $HOST_PROJECT_DIR"; \
+        HOST_CFG="$(printf '%s\n' "$paths" | sed -n 's/^HOST_CFG=//p')"; \
+        echo "  global tier: $HOST_CFG/memory-global"; \
         if [ -d "$STATE_DIR/projects/-workspace" ]; then \
             echo "  WARN: legacy shared bucket present ($STATE_DIR/projects/-workspace)"; \
-            echo "        run 'just migrate-memory' from the owning repo"; \
+            echo "        run 'claude-{{flavor}} migrate-memory' from the owning repo"; \
         else echo "  ok: no legacy shared bucket"; fi

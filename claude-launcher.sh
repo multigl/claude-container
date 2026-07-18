@@ -303,6 +303,33 @@ case "${1:-}" in
         CLAUDE_RESEED=1 run_in_container true
         echo ">> re-seeded $HOST_CFG from image (settings + plugins overwritten)"
         ;;
+    migrate-memory)
+        # One-time: move the legacy shared projects/-workspace bucket to THIS
+        # repo's per-project key. Pure host-side (no container). Run from the repo
+        # that owns that history. Refuses only if the target already holds data.
+        _legacy="$STATE_DIR/projects/-workspace"
+        if [[ ! -d "$_legacy" ]]; then
+            echo ">> no legacy bucket at $_legacy; nothing to migrate"
+            exit 0
+        fi
+        if [[ -d "$HOST_PROJECT_DIR" && -n "$(ls -A "$HOST_PROJECT_DIR" 2>/dev/null)" ]]; then
+            echo ">> target exists and is non-empty: $HOST_PROJECT_DIR; refusing to overwrite" >&2
+            exit 1
+        fi
+        # The launcher pre-creates an empty target above; remove it so mv renames
+        # the legacy bucket into place instead of nesting it inside.
+        rmdir "$HOST_PROJECT_DIR" 2>/dev/null || true
+        mkdir -p "$(dirname "$HOST_PROJECT_DIR")"
+        mv "$_legacy" "$HOST_PROJECT_DIR"
+        echo ">> migrated $_legacy -> $HOST_PROJECT_DIR"
+        ;;
+    rebuild-memory-index)
+        # The entrypoint regenerates both memory indexes (project + global tier)
+        # on every launch, so a no-op container run rebuilds them without starting
+        # a session. Manual repair for a derived MEMORY.md.
+        run_in_container true
+        echo ">> rebuilt memory indexes for $PROJECT_KEY (project + global tier)"
+        ;;
     shell)
         shift
         run_in_container bash "$@"

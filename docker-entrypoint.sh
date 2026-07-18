@@ -208,7 +208,7 @@ HDR
     } > "$_cmd_tmp"
     chown claude:claude "$_cmd_tmp" 2>/dev/null || true
     chmod 0644 "$_cmd_tmp" 2>/dev/null || true
-    mv "$_cmd_tmp" "$DEST/CLAUDE.md"
+    mv "$_cmd_tmp" "$DEST/CLAUDE.md" 2>/dev/null || rm -f "$_cmd_tmp"
 fi
 # ----------------------------------------------------------------------------
 
