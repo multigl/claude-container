@@ -56,9 +56,10 @@ rebuild-all:
 auth:
     CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh auth
 
-# Run the Python test suite for the gateway Okta helper
+# Run all test suites: gateway Okta helper (pytest) + bash suites (merge, paths)
 test:
     uv run pytest -q
+    {{here}}/tests/run.sh
 
 # Run `claude` against the current directory (uses {{flavor}})
 run:
@@ -124,7 +125,7 @@ doctor:
                 test -f /v/okta.json 2>/dev/null \
             && echo "  ok: Okta token cache present" \
             || echo "  MISSING: run 'FLAVOR=gateway just auth'"; \
-        env="$HOME/.claude-gateway.env"; \
+        env="${XDG_CONFIG_HOME:-$HOME/.config}/vida-claude-container/gateway/env"; \
         if [ -f "$env" ] && grep -Eq '^OKTA_CLIENT_ID=.+' "$env"; then \
             echo "  ok: OKTA_CLIENT_ID set in $env"; \
         else echo "  MISSING: set OKTA_CLIENT_ID in $env"; fi; \
