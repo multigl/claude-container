@@ -83,6 +83,33 @@ under `$XDG_STATE_HOME/vida-claude-container/<flavor>/` (`claude/` → the conta
 env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_GITCONFIG`,
 `CLAUDE_SETTINGS`); state paths follow `XDG_STATE_HOME` only.
 
+### Memory scoping (per-project + global tier)
+
+The container always runs at `/workspace`, so Claude Code's cwd-slug is always
+`-workspace`. To stop every host repo from sharing one memory/history bucket, the
+launcher keys a host dir on the host path — `PROJECT_KEY` is a readable slug of
+`$PWD` (`/`→`-`) plus a `cksum` of the full path (the checksum disambiguates
+hyphenated paths, which the slug alone would collide) — at
+`$STATE_DIR/projects/<key>/`, and bind-mounts it over the container's
+`projects/-workspace`. So memory **and** `/resume` transcripts isolate per host
+repo; settings/plugins stay shared per-flavor.
+
+A per-flavor **global** tier lives at `~/.claude/memory-global/` (inside the
+`HOST_CFG` mount). The entrypoint composes `~/.claude/CLAUDE.md` from a static
+two-tier instruction block plus the global index, and Claude auto-loads that as
+user memory — so cross-project facts reach context every session.
+
+In both tiers `MEMORY.md` is **derived**: `rebuild-memory-index.sh` (baked at
+`/opt/claude/`, unit-tested by `tests/test_rebuild_memory_index.sh`) regenerates
+it from the `*.md` fact files' frontmatter on every launch. Edit fact files, not
+the index; a concurrent index write that is lost self-heals next launch. Manual
+repair: `just rebuild-memory-index`.
+
+Migration from the pre-fix shared bucket: `just migrate-memory` (run once, from
+the owning repo) moves `projects/-workspace` to this repo's key; `just doctor`
+warns while the legacy bucket remains. Pre-fix history was commingled across repos
+and cannot be de-mixed — it lands wholesale under the key you migrate from.
+
 ## Conventions & gotchas
 
 - **Non-root.** Runs as `claude` (uid 1000) — Claude Code refuses
@@ -122,6 +149,11 @@ env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_GITCONFIG`,
   the `*_CREDENTIALS` name pattern.
 - **Plugins.** `superpowers` and `caveman` are pre-seeded and enabled; both are
   pinned to specific SHAs in the `Dockerfile` base stage.
+- **Memory is per-project, index is derived.** Each host repo gets its own
+  `projects/<key>/memory` + transcripts (keyed on `$PWD` slug + a `cksum` suffix);
+  a per-flavor global tier lives at `~/.claude/memory-global/` and is surfaced via
+  the composed `~/.claude/CLAUDE.md`. `MEMORY.md` is regenerated from fact-file
+  frontmatter every launch — never hand-maintain it. See "Memory scoping" above.
 - **Settings override.** `settings.override.json` (in the config dir) is deep-merged
   onto the seeded `settings.json` every launch, so you can tweak e.g. `{"model":
   "..."}` and restart without editing the repo seed or running `just reseed`. The
