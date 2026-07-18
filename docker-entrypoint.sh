@@ -67,6 +67,25 @@ if [[ -d "$SEED" ]]; then
     fi
 fi
 
+# Merge the user's settings override (mounted ro at
+# ~/.claude/settings.override.json by the launcher when present) onto the seeded
+# settings.json, in place. Re-applied every launch so the override's keys win.
+# The base settings.json keeps its normal seeded lifecycle (preserved across
+# launches via --ignore-existing; refreshed only by `reseed`), so writes made by
+# /setup-vertex survive. jq `*` deep-merges objects; arrays/scalars are replaced
+# by the override. Removing a key from the override does not auto-revert the base
+# until the next reseed (in-place merge) -- documented behavior.
+SETTINGS="$DEST/settings.json"
+OVERRIDE="$DEST/settings.override.json"
+if [[ -f "$OVERRIDE" && -f "$SETTINGS" ]] && command -v jq >/dev/null 2>&1; then
+    tmp="$(mktemp)"
+    if gosu claude /opt/claude/merge-settings.sh "$SETTINGS" "$OVERRIDE" > "$tmp"; then
+        cat "$tmp" > "$SETTINGS"
+        chown claude:claude "$SETTINGS" 2>/dev/null || true
+    fi
+    rm -f "$tmp"
+fi
+
 # Pre-fill ~/.claude.json (trust + onboarding flags) if empty/missing.
 # Bind-mounted as a file from host so value persists across runs. Must
 # write in-place (cat >) -- `install`/`cp` would try to rename-replace
