@@ -150,6 +150,68 @@ fi
 chown claude:claude "$DOTCLAUDE" 2>/dev/null || true
 chmod 0644 "$DOTCLAUDE" 2>/dev/null || true
 
+# --- memory: derived index + global tier surfacing --------------------------
+# The container always runs at /workspace, so Claude's per-project dir is always
+# projects/-workspace -- here backed by a per-host-repo bind mount (see launcher).
+# MEMORY.md is DERIVED from each tier's *.md fact-file frontmatter: rebuild it
+# every launch so a concurrent-write loss self-heals and the global index is
+# fresh. The global tier (memory-global/, shared per-flavor) is surfaced by
+# composing it into ~/.claude/CLAUDE.md, which Claude auto-loads as user memory.
+REBUILD=/opt/claude/rebuild-memory-index.sh
+PROJ_MEM="$DEST/projects/-workspace/memory"
+GLOBAL_MEM="$DEST/memory-global"
+if [[ -x "$REBUILD" ]]; then
+    if [[ -d "$PROJ_MEM" ]]; then
+        gosu claude "$REBUILD" "$PROJ_MEM" || true
+    fi
+    # Create the per-flavor global tier. Guarded so a stray non-directory at this
+    # path degrades the memory feature instead of killing container startup.
+    mkdir -p "$GLOBAL_MEM" 2>/dev/null || true
+    if [[ -d "$GLOBAL_MEM" ]]; then
+        chown claude:claude "$GLOBAL_MEM" 2>/dev/null || true
+        gosu claude "$REBUILD" "$GLOBAL_MEM" || true
+    fi
+    # Never silently destroy a CLAUDE.md a user may have hand-authored before this
+    # feature existed: back it up once if it isn't already our derived file.
+    if [[ -f "$DEST/CLAUDE.md" && ! -e "$DEST/CLAUDE.md.pre-memory.bak" ]] \
+        && ! head -1 "$DEST/CLAUDE.md" 2>/dev/null | grep -q '^# Memory (container-managed)$'; then
+        cp "$DEST/CLAUDE.md" "$DEST/CLAUDE.md.pre-memory.bak" 2>/dev/null || true
+        chown claude:claude "$DEST/CLAUDE.md.pre-memory.bak" 2>/dev/null || true
+    fi
+    # Compose the auto-loaded user-memory file: static two-tier instructions plus
+    # the freshly-rebuilt global index. Written atomically (temp in $DEST + mv,
+    # same-filesystem rename) and overwritten each launch (derived).
+    _cmd_tmp="$(mktemp "$DEST/.CLAUDE.md.XXXXXX")"
+    {
+        cat <<'HDR'
+# Memory (container-managed)
+
+This container keeps two memory tiers:
+
+- **Project memory** (`~/.claude/projects/-workspace/memory/`) — facts specific to
+  THIS repo. Backed by a per-host-repo dir, so it does not leak across repos.
+- **Global memory** (`~/.claude/memory-global/`) — cross-project facts that should
+  follow you everywhere in this flavor (who the user is, commit style, standing
+  preferences). Shared across all repos of this flavor.
+
+Write repo-specific facts to project memory; write cross-project facts to global
+memory. In BOTH tiers, `MEMORY.md` is DERIVED from the `*.md` fact files'
+frontmatter and rebuilt every launch — edit the fact files, not the index.
+
+## Global memory index
+HDR
+        if grep -qE '^- ' "$GLOBAL_MEM/MEMORY.md" 2>/dev/null; then
+            grep -E '^- ' "$GLOBAL_MEM/MEMORY.md"
+        else
+            echo "_(none yet)_"
+        fi
+    } > "$_cmd_tmp"
+    chown claude:claude "$_cmd_tmp" 2>/dev/null || true
+    chmod 0644 "$_cmd_tmp" 2>/dev/null || true
+    mv "$_cmd_tmp" "$DEST/CLAUDE.md"
+fi
+# ----------------------------------------------------------------------------
+
 # --- git identity + gh credential helper -------------------------------------
 # Write a container-owned ~/.gitconfig that INCLUDES the launcher-seeded, ro
 # identity file (mounted at ~/.gitconfig-identity). git ignores the include if the
