@@ -90,6 +90,10 @@ RUN userdel -r node 2>/dev/null || true \
 COPY statusline.sh /opt/claude/statusline.sh
 RUN chmod +x /opt/claude/statusline.sh
 
+# Settings-override merge helper, invoked by the entrypoint each launch.
+COPY bin/merge-settings.sh /opt/claude/merge-settings.sh
+RUN chmod +x /opt/claude/merge-settings.sh
+
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
