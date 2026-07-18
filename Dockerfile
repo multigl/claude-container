@@ -121,7 +121,8 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
 
 ENV CLAUDE_CODE_USE_VERTEX=1 \
     ANTHROPIC_VERTEX_PROJECT_ID=vertex-test-495715 \
-    CLOUD_ML_REGION=us 
+    CLOUD_ML_REGION=us \
+    CLAUDE_FLAVOR_NAME=vertex
 # GOOGLE_APPLICATION_CREDENTIALS is exported by the entrypoint at runtime
 # rather than baked into the image (avoids the Hadolint
 # SecretsUsedInArgOrEnv warning on the *_CREDENTIALS name pattern).
@@ -146,7 +147,8 @@ ENV ANTHROPIC_BASE_URL=${GATEWAY_BASE_URL} \
     ANTHROPIC_MODEL=claude-opus-4-8 \
     ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6 \
     ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8 \
-    ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
+    ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5 \
+    CLAUDE_FLAVOR_NAME=gateway
 # Model IDs are placeholders -- set them to the model_name strings your gateway
 # exposes. ENABLE_TOOL_SEARCH=true re-enables MCP tool search, which Claude
 # disables by default against a non-first-party ANTHROPIC_BASE_URL.

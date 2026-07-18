@@ -5,7 +5,11 @@
 input=$(cat)
 
 cwd=$(echo "$input" | jq -r '.workspace.current_dir // .cwd')
-dir=$(basename "$cwd")
+# Container mounts host $PWD -> /workspace, so basename "$cwd" is always
+# "workspace". CLAUDE_HOST_DIR (injected by the launcher) carries the real host
+# path; fall back to $cwd when it is unset (e.g. running the script outside the
+# container).
+dir=$(basename "${CLAUDE_HOST_DIR:-$cwd}")
 
 model=$(echo "$input" | jq -r '.model.display_name // ""')
 
@@ -26,4 +30,12 @@ else
   suffix=$(printf "\033[2m%s\033[0m" "$model")
 fi
 
-printf "%s  %s\n" "$dir_git" "$suffix"
+# Flavor badge: baked per-image as CLAUDE_FLAVOR_NAME. vertex=green, gateway=magenta.
+case "$CLAUDE_FLAVOR_NAME" in
+  vertex)  badge=$(printf "\033[1;32m[%s]\033[0m " "$CLAUDE_FLAVOR_NAME") ;;
+  gateway) badge=$(printf "\033[1;35m[%s]\033[0m " "$CLAUDE_FLAVOR_NAME") ;;
+  ?*)      badge=$(printf "\033[1m[%s]\033[0m " "$CLAUDE_FLAVOR_NAME") ;;
+  *)       badge="" ;;
+esac
+
+printf "%s%s  %s\n" "$badge" "$dir_git" "$suffix"

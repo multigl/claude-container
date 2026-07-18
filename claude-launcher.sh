@@ -265,6 +265,7 @@ run_in_container() {
         --env-file "$HOST_ENV_FILE" \
         -e "HOST_UID=$(id -u)" \
         -e "HOST_GID=$(id -g)" \
+        -e "CLAUDE_HOST_DIR=$PWD" \
         -v "$PWD:/workspace" \
         -v "$HOST_CFG:/home/claude/.claude" \
         -v "$HOST_PROJECT_DIR:/home/claude/.claude/projects/-workspace" \
