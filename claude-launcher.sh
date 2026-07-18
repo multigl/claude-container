@@ -10,6 +10,8 @@
 #   claude-gateway            # run `claude` in $PWD against the gateway
 #   claude-<flavor> shell     # bash inside the container
 #   claude-vertex auth        # one-time gcloud ADC login (vertex only)
+#   claude-<flavor> migrate-memory        # move legacy shared memory to this repo's key
+#   claude-<flavor> rebuild-memory-index  # regenerate the derived MEMORY.md indexes
 #   claude-<flavor> -- <args> # pass extra args to `claude`
 #
 # Nothing touches host ~/.zshrc or host ~/.config/gcloud. Per-flavor state lives

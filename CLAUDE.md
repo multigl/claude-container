@@ -103,12 +103,13 @@ In both tiers `MEMORY.md` is **derived**: `rebuild-memory-index.sh` (baked at
 `/opt/claude/`, unit-tested by `tests/test_rebuild_memory_index.sh`) regenerates
 it from the `*.md` fact files' frontmatter on every launch. Edit fact files, not
 the index; a concurrent index write that is lost self-heals next launch. Manual
-repair: `just rebuild-memory-index`.
+repair: `claude-<flavor> rebuild-memory-index`.
 
-Migration from the pre-fix shared bucket: `just migrate-memory` (run once, from
-the owning repo) moves `projects/-workspace` to this repo's key; `just doctor`
-warns while the legacy bucket remains. Pre-fix history was commingled across repos
-and cannot be de-mixed — it lands wholesale under the key you migrate from.
+Migration from the pre-fix shared bucket: `claude-<flavor> migrate-memory` (run
+once, from the owning repo) moves `projects/-workspace` to this repo's key;
+`just doctor` warns while the legacy bucket remains. Pre-fix history was
+commingled across repos and cannot be de-mixed — it lands wholesale under the
+key you migrate from.
 
 ## Conventions & gotchas
 

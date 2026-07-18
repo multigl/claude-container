@@ -102,6 +102,8 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 | `claude-vertex` / `claude-gateway` | Run `claude` against the current directory        |
 | `claude-<flavor> shell`  | Drop into `bash` inside the container                       |
 | `claude-<flavor> -- <args>` | Pass flags through to `claude`                           |
+| `claude-<flavor> migrate-memory` | One-time: move the legacy shared memory bucket to this repo's per-project key (run from the repo that owns that history) |
+| `claude-<flavor> rebuild-memory-index` | Regenerate the derived `MEMORY.md` index for this repo + the global tier (normally automatic each launch; manual repair) |
 | `just build`             | Build the `FLAVOR` image (`--target`)                       |
 | `just build-vertex` / `build-gateway` / `build-all` | Build a specific flavor / both |
 | `just rebuild-vertex` / `rebuild-gateway` / `rebuild-all` | No-cache rebuild of a flavor / both |
@@ -196,8 +198,11 @@ Wrapper files live in an XDG split under the `vida-claude-container` namespace:
     └── settings.override.json  # optional Claude settings deltas, e.g. {"model": "..."}
 
     $XDG_STATE_HOME/vida-claude-container/<flavor>/    # machine-managed; disposable
-    ├── claude/                 # history, projects, seeded config -> container ~/.claude
-    └── claude.json             # trust flags, mcpServers, grafted MCP creds
+    ├── claude/                 # seeded config -> container ~/.claude
+    │   └── memory-global/      # per-flavor global memory tier (cross-project facts)
+    ├── claude.json             # trust flags, mcpServers, grafted MCP creds
+    └── projects/<key>/         # per-repo memory + /resume history, keyed on host $PWD
+                                 # (see `claude-<flavor> migrate-memory` / `rebuild-memory-index`)
 
 (Defaults: `$XDG_CONFIG_HOME` → `~/.config`, `$XDG_STATE_HOME` → `~/.local/state`.)
 
