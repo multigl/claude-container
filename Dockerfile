@@ -94,6 +94,10 @@ RUN chmod +x /opt/claude/statusline.sh
 COPY bin/merge-settings.sh /opt/claude/merge-settings.sh
 RUN chmod +x /opt/claude/merge-settings.sh
 
+# Memory-index rebuild helper, invoked by the entrypoint each launch.
+COPY bin/rebuild-memory-index.sh /opt/claude/rebuild-memory-index.sh
+RUN chmod +x /opt/claude/rebuild-memory-index.sh
+
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
