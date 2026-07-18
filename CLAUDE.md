@@ -95,7 +95,7 @@ hyphenated paths, which the slug alone would collide) — at
 repo; settings/plugins stay shared per-flavor.
 
 A per-flavor **global** tier lives at `~/.claude/memory-global/` (inside the
-`HOST_CFG` mount). The entrypoint composes `~/.claude/CLAUDE.md` from a static
+`STATE_CLAUDE_DIR` mount). The entrypoint composes `~/.claude/CLAUDE.md` from a static
 two-tier instruction block plus the global index, and Claude auto-loads that as
 user memory — so cross-project facts reach context every session.
 

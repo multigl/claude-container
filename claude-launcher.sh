@@ -36,7 +36,7 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${NS}/${FLAVOR}"
 
 # State: the .claude dir (mounted to the container's ~/.claude) + .claude.json.
 # No per-flavor override knob -- relocation follows XDG_STATE_HOME only.
-HOST_CFG="${STATE_DIR}/claude"
+STATE_CLAUDE_DIR="${STATE_DIR}/claude"
 HOST_DOTCLAUDE="${STATE_DIR}/claude.json"
 
 # Per-project isolation. The container always runs at /workspace, so Claude
@@ -67,7 +67,7 @@ if [[ "${1:-}" == "--print-paths" ]]; then
 FLAVOR=$FLAVOR
 CFG_DIR=$CFG_DIR
 STATE_DIR=$STATE_DIR
-HOST_CFG=$HOST_CFG
+STATE_CLAUDE_DIR=$STATE_CLAUDE_DIR
 HOST_DOTCLAUDE=$HOST_DOTCLAUDE
 PROJECT_KEY=$PROJECT_KEY
 HOST_PROJECT_DIR=$HOST_PROJECT_DIR
@@ -87,7 +87,7 @@ GCLOUD_VOL="${CLAUDE_VERTEX_GCLOUD_VOL:-claude-vertex-gcloud}"
 # apiKeyHelper's refresh_token/id_token store). Wipe with `reset-auth`.
 OKTA_VOL="${CLAUDE_GATEWAY_OKTA_VOL:-claude-gateway-okta}"
 
-mkdir -p "$CFG_DIR" "$HOST_CFG" "$HOST_PROJECT_DIR"
+mkdir -p "$CFG_DIR" "$STATE_CLAUDE_DIR" "$HOST_PROJECT_DIR"
 # Ensure file exists so Docker bind-mounts it as a file, not a directory.
 [[ -f "$HOST_DOTCLAUDE" ]] || : > "$HOST_DOTCLAUDE"
 
@@ -267,7 +267,7 @@ run_in_container() {
         -e "HOST_GID=$(id -g)" \
         -e "CLAUDE_HOST_DIR=$PWD" \
         -v "$PWD:/workspace" \
-        -v "$HOST_CFG:/home/claude/.claude" \
+        -v "$STATE_CLAUDE_DIR:/home/claude/.claude" \
         -v "$HOST_PROJECT_DIR:/home/claude/.claude/projects/-workspace" \
         -v "$HOST_DOTCLAUDE:/home/claude/.claude.json" \
         -w /workspace \
@@ -304,15 +304,15 @@ case "${1:-}" in
         # host config, OVERWRITING those files with the image's current version.
         # Other state (history, projects, shell-snapshots) is left untouched.
         CLAUDE_RESEED=1 run_in_container true
-        echo ">> re-seeded $HOST_CFG from image (settings + plugins overwritten)"
+        echo ">> re-seeded $STATE_CLAUDE_DIR from image (settings + plugins overwritten)"
         ;;
     migrate-memory)
         # One-time: move the legacy shared bucket to THIS repo's per-project key.
         # Pure host-side (no container). Run from the repo that owns that history.
         # Refuses only if the target already holds data. The pre-feature bucket
-        # lives INSIDE the ~/.claude mount ($HOST_CFG/projects/-workspace), not at
+        # lives INSIDE the ~/.claude mount ($STATE_CLAUDE_DIR/projects/-workspace), not at
         # the new sibling $STATE_DIR/projects/ location.
-        _legacy="$HOST_CFG/projects/-workspace"
+        _legacy="$STATE_CLAUDE_DIR/projects/-workspace"
         if [[ ! -d "$_legacy" ]]; then
             echo ">> no legacy bucket at $_legacy; nothing to migrate"
             exit 0
