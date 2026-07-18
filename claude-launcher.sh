@@ -37,6 +37,19 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${NS}/${FLAVOR}"
 HOST_CFG="${STATE_DIR}/claude"
 HOST_DOTCLAUDE="${STATE_DIR}/claude.json"
 
+# Per-project isolation. The container always runs at /workspace, so Claude
+# Code's cwd-slug is always "-workspace" and every host repo would otherwise
+# share one memory/history bucket. Key a host dir on the host path so each repo's
+# memory + transcripts stay separate, and bind-mount it over the container's
+# projects/-workspace (below). The key is a readable slug of $PWD PLUS a checksum
+# of the full path: slugifying alone maps both "/" and "-" to "-", so two paths
+# like a/foo-bar/baz and a/foo/bar-baz would collide -- the checksum disambiguates.
+# $PWD (not realpath) so the key matches the path we bind-mount at /workspace.
+_pwd_slug="$(printf '%s' "$PWD" | sed 's#/#-#g')"
+_pwd_hash="$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
+PROJECT_KEY="${_pwd_slug}-${_pwd_hash}"
+HOST_PROJECT_DIR="${STATE_DIR}/projects/${PROJECT_KEY}"
+
 # Config: env / mounts / gitconfig / settings override. Each keeps an escape-hatch
 # override env var so it can be pointed into a dotfiles repo. (See README for the
 # mounts-file format and the settings.override.json semantics.)
@@ -54,6 +67,8 @@ CFG_DIR=$CFG_DIR
 STATE_DIR=$STATE_DIR
 HOST_CFG=$HOST_CFG
 HOST_DOTCLAUDE=$HOST_DOTCLAUDE
+PROJECT_KEY=$PROJECT_KEY
+HOST_PROJECT_DIR=$HOST_PROJECT_DIR
 HOST_ENV_FILE=$HOST_ENV_FILE
 HOST_MOUNTS_FILE=$HOST_MOUNTS_FILE
 HOST_GITCONFIG=$HOST_GITCONFIG
@@ -70,7 +85,7 @@ GCLOUD_VOL="${CLAUDE_VERTEX_GCLOUD_VOL:-claude-vertex-gcloud}"
 # apiKeyHelper's refresh_token/id_token store). Wipe with `reset-auth`.
 OKTA_VOL="${CLAUDE_GATEWAY_OKTA_VOL:-claude-gateway-okta}"
 
-mkdir -p "$CFG_DIR" "$HOST_CFG"
+mkdir -p "$CFG_DIR" "$HOST_CFG" "$HOST_PROJECT_DIR"
 # Ensure file exists so Docker bind-mounts it as a file, not a directory.
 [[ -f "$HOST_DOTCLAUDE" ]] || : > "$HOST_DOTCLAUDE"
 
@@ -250,6 +265,7 @@ run_in_container() {
         -e "HOST_GID=$(id -g)" \
         -v "$PWD:/workspace" \
         -v "$HOST_CFG:/home/claude/.claude" \
+        -v "$HOST_PROJECT_DIR:/home/claude/.claude/projects/-workspace" \
         -v "$HOST_DOTCLAUDE:/home/claude/.claude.json" \
         -w /workspace \
         "$IMAGE" "$@"

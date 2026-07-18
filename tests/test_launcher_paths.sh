@@ -50,4 +50,34 @@ assert_contains "$out" "HOST_MOUNTS_FILE=/tmp/my.mounts"  "CLAUDE_MOUNTS_FILE ov
 assert_contains "$out" "HOST_GITCONFIG=/tmp/my.gitconfig" "CLAUDE_GITCONFIG override honored"
 rm -rf "$home"
 
+# --- per-project key + dir (keyed on the launcher's $PWD) ---
+# Assert the STRUCTURE (readable slug is a substring; dir = STATE_DIR/projects/<key>)
+# rather than re-deriving the exact key, so the test isn't tautological.
+res="$(run_paths CLAUDE_FLAVOR=vertex)"; home="$(head -1 <<<"$res")"; out="$(tail -n +2 <<<"$res")"
+key="$(sed -n 's/^PROJECT_KEY=//p' <<<"$out")"
+slug="$(printf '%s' "$PWD" | sed 's#/#-#g')"
+assert_contains "$key" "$slug" "project key contains the readable slug of cwd"
+assert_contains "$out" "HOST_PROJECT_DIR=$home/.local/state/vida-claude-container/vertex/projects/$key" "project dir = STATE_DIR/projects/<key>"
+assert_eq "" "$(ls -A "$home" 2>/dev/null)" "no side effects (project key is pure)"
+rm -rf "$home"
+
+# --- collision guard: two distinct paths whose naive slug is identical must NOT
+# --- map to the same PROJECT_KEY (hyphenated dir names are common). ---
+run_paths_in() {  # run_paths_in DIR KEY=VAL...
+    local d="$1"; shift
+    local h; h="$(mktemp -d)"
+    local o
+    o="$(cd "$d" && env -i HOME="$h" PATH="$PATH" "$@" bash "$LAUNCHER" --print-paths 2>/dev/null)"
+    printf '%s\n%s' "$h" "$o"
+}
+cbase="$(mktemp -d)"
+mkdir -p "$cbase/foo-bar/baz" "$cbase/foo/bar-baz"
+rA="$(run_paths_in "$cbase/foo-bar/baz" CLAUDE_FLAVOR=vertex)"; hA="$(head -1 <<<"$rA")"; oA="$(tail -n +2 <<<"$rA")"
+rB="$(run_paths_in "$cbase/foo/bar-baz" CLAUDE_FLAVOR=vertex)"; hB="$(head -1 <<<"$rB")"; oB="$(tail -n +2 <<<"$rB")"
+keyA="$(sed -n 's/^PROJECT_KEY=//p' <<<"$oA")"
+keyB="$(sed -n 's/^PROJECT_KEY=//p' <<<"$oB")"
+if [[ -n "$keyA" && -n "$keyB" && "$keyA" != "$keyB" ]]; then collide=distinct; else collide=collision; fi
+assert_eq "distinct" "$collide" "hyphenated paths do not collide onto one PROJECT_KEY"
+rm -rf "$hA" "$hB" "$cbase"
+
 finish
