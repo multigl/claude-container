@@ -180,6 +180,49 @@ The container uses your **host** git/GitHub setup — no second login.
     at your 1Password agent socket) and restart Docker Desktop, so launchd exposes
     the agent to Docker. Verify inside the container with `ssh-add -l`.
 
+## File locations (XDG)
+
+Wrapper files live in an XDG split under the `vida-claude-container` namespace:
+
+    $XDG_CONFIG_HOME/vida-claude-container/<flavor>/   # you edit these; back them up
+    ├── env                     # MCP creds / endpoints (chmod 600)
+    ├── mounts                  # extra host dirs to expose (see below)
+    ├── gitconfig               # git identity used in the container (chmod 600)
+    └── settings.override.json  # optional Claude settings deltas, e.g. {"model": "..."}
+
+    $XDG_STATE_HOME/vida-claude-container/<flavor>/    # machine-managed; disposable
+    ├── claude/                 # history, projects, seeded config -> container ~/.claude
+    └── claude.json             # trust flags, mcpServers, grafted MCP creds
+
+(Defaults: `$XDG_CONFIG_HOME` → `~/.config`, `$XDG_STATE_HOME` → `~/.local/state`.)
+
+### settings.override.json
+
+Drop a small JSON file of Claude settings deltas here to tweak behavior without
+editing the repo seed. It is deep-merged onto the seeded `settings.json` on every
+launch. Example — test a new model in your Vertex project:
+
+    { "model": "claude-sonnet-6@your-project-region" }
+
+Then restart the container. Two caveats: array keys (e.g. `permissions.allow`) are
+**replaced**, not merged; and **removing** a key from the override won't revert the
+active value until you `just reseed` (changing a value works on the next launch).
+
+### Migration from the old `~/.claude-<flavor>*` layout
+
+Earlier builds stored these files directly in `$HOME`. There is no automated
+migration; move them by hand once (per flavor):
+
+    flavor=vertex   # or gateway
+    cfg="${XDG_CONFIG_HOME:-$HOME/.config}/vida-claude-container/$flavor"
+    state="${XDG_STATE_HOME:-$HOME/.local/state}/vida-claude-container/$flavor"
+    mkdir -p "$cfg" "$state"
+    mv ~/.claude-$flavor.env       "$cfg/env"        2>/dev/null || true
+    mv ~/.claude-$flavor.mounts    "$cfg/mounts"     2>/dev/null || true
+    mv ~/.claude-$flavor.gitconfig "$cfg/gitconfig"  2>/dev/null || true
+    mv ~/.claude-$flavor          "$state/claude"    2>/dev/null || true
+    mv ~/.claude-$flavor.json     "$state/claude.json" 2>/dev/null || true
+
 ## Gateway configuration
 
 The gateway flavor is a generic Anthropic-format client pointed at your gateway.

@@ -60,8 +60,9 @@ gateway flavor.
   Okta device login).
 - `just run` / `shell` / `reseed` / `doctor` — run claude / bash / re-seed config /
   self-check.
-- `just test` (`uv run pytest -q`) — the gateway Okta helper suite (the only
-  automated tests; there is no harness for the shell/Docker layer).
+- `just test` — runs `uv run pytest -q` (the gateway Okta helper) **and** the
+  plain-bash suites in `tests/` (`test_merge_settings.sh`, `test_launcher_paths.sh`,
+  via `tests/run.sh`). No Docker required.
 
 ## How config seeding works
 
@@ -71,6 +72,15 @@ edits survive. `CLAUDE_RESEED=1` (via `just reseed`) instead overwrites the seed
 files (settings + plugins) while preserving history/projects. The `mcpServers`
 block is force-synced from the seed each launch, then `env`/`headers` creds are
 grafted read-only from the host `~/.claude.json` (mounted at `.host-claude.json`).
+
+Host-side wrapper files live in an XDG split (namespace `vida-claude-container`):
+config the user hand-edits under `$XDG_CONFIG_HOME/vida-claude-container/<flavor>/`
+(`env`, `mounts`, `gitconfig`, `settings.override.json`), and machine-managed state
+under `$XDG_STATE_HOME/vida-claude-container/<flavor>/` (`claude/` → the container's
+`~/.claude`, and `claude.json`). Defaults fall back to `~/.config` and
+`~/.local/state` when the XDG vars are unset. Only config files have escape-hatch
+env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_GITCONFIG`,
+`CLAUDE_SETTINGS`); state paths follow `XDG_STATE_HOME` only.
 
 ## Conventions & gotchas
 
@@ -108,3 +118,13 @@ grafted read-only from the host `~/.claude.json` (mounted at `.host-claude.json`
   the `*_CREDENTIALS` name pattern.
 - **Plugins.** `superpowers` and `caveman` are pre-seeded and enabled; both are
   pinned to specific SHAs in the `Dockerfile` base stage.
+- **Settings override.** `settings.override.json` (in the config dir) is deep-merged
+  onto the seeded `settings.json` every launch, so you can tweak e.g. `{"model":
+  "..."}` and restart without editing the repo seed or running `just reseed`. The
+  base `settings.json` keeps its normal seeded lifecycle (preserved across launches;
+  refreshed by `just reseed`), which preserves `/setup-vertex`'s writes. Caveats: jq
+  `*` **replaces arrays wholesale** (an override `permissions.allow` replaces the
+  base's), and because the merge is in place, **removing** a key from the override
+  doesn't auto-revert the active value until the next `just reseed` (changing a value
+  works on the next launch). The merge lives in `bin/merge-settings.sh` (baked at
+  `/opt/claude/merge-settings.sh`), unit-tested by `tests/test_merge_settings.sh`.
