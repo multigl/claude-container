@@ -306,10 +306,12 @@ case "${1:-}" in
         echo ">> re-seeded $HOST_CFG from image (settings + plugins overwritten)"
         ;;
     migrate-memory)
-        # One-time: move the legacy shared projects/-workspace bucket to THIS
-        # repo's per-project key. Pure host-side (no container). Run from the repo
-        # that owns that history. Refuses only if the target already holds data.
-        _legacy="$STATE_DIR/projects/-workspace"
+        # One-time: move the legacy shared bucket to THIS repo's per-project key.
+        # Pure host-side (no container). Run from the repo that owns that history.
+        # Refuses only if the target already holds data. The pre-feature bucket
+        # lives INSIDE the ~/.claude mount ($HOST_CFG/projects/-workspace), not at
+        # the new sibling $STATE_DIR/projects/ location.
+        _legacy="$HOST_CFG/projects/-workspace"
         if [[ ! -d "$_legacy" ]]; then
             echo ">> no legacy bucket at $_legacy; nothing to migrate"
             exit 0

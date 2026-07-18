@@ -136,10 +136,9 @@ doctor:
         || echo "  MISSING: run 'just install' (or add {{bin_dir}} to PATH)"
     @echo "== memory ({{flavor}}) =="
     @paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh --print-paths)"; \
-        STATE_DIR="$(printf '%s\n' "$paths" | sed -n 's/^STATE_DIR=//p')"; \
         HOST_CFG="$(printf '%s\n' "$paths" | sed -n 's/^HOST_CFG=//p')"; \
         echo "  global tier: $HOST_CFG/memory-global"; \
-        if [ -d "$STATE_DIR/projects/-workspace" ]; then \
-            echo "  WARN: legacy shared bucket present ($STATE_DIR/projects/-workspace)"; \
+        if [ -d "$HOST_CFG/projects/-workspace" ]; then \
+            echo "  WARN: legacy shared bucket present ($HOST_CFG/projects/-workspace)"; \
             echo "        run 'claude-{{flavor}} migrate-memory' from the owning repo"; \
         else echo "  ok: no legacy shared bucket"; fi
