@@ -14,7 +14,7 @@ own `claude`, gcloud, and shell config. Two **flavors** build from one repo:
 | `gateway` | an LLM gateway (LiteLLM)| baked Okta `apiKeyHelper` + `ANTHROPIC_BASE_URL` |
 
 The host's regular `claude` (public Anthropic API) is never touched; each flavor
-keeps its own state under `~/.claude-<flavor>/`.
+keeps its own state under `~/.local/state/vida-claude-container/<flavor>/claude/`.
 
 ## Architecture
 
@@ -67,7 +67,8 @@ gateway flavor.
 ## How config seeding works
 
 On first launch `docker-entrypoint.sh` copies `/opt/claude-seed` → `~/.claude`
-(the host `~/.claude-<flavor>` bind mount) with `rsync --ignore-existing`, so user
+(the host `~/.local/state/vida-claude-container/<flavor>/claude` bind mount) with
+`rsync --ignore-existing`, so user
 edits survive. `CLAUDE_RESEED=1` (via `just reseed`) instead overwrites the seeded
 files (settings + plugins) while preserving history/projects. The `mcpServers`
 block is force-synced from the seed each launch, then `env`/`headers` creds are
@@ -88,8 +89,9 @@ env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_GITCONFIG`,
   `bypassPermissions` as root. The entrypoint remaps this user to the host's
   UID/GID so writes into mounts land with host ownership.
 - **Ephemeral (`docker run --rm`).** Nothing written to the container filesystem
-  survives. Persistent state must live in the `~/.claude-<flavor>` bind mount, the
-  host `.json`/`.env` files, or a named docker volume (gcloud ADC, Okta cache).
+  survives. Persistent state must live in the
+  `~/.local/state/vida-claude-container/<flavor>/claude` bind mount, the host
+  `claude.json`/config `env` files, or a named docker volume (gcloud ADC, Okta cache).
 - **claude-code is version-pinned; auto-update is OFF** (`DISABLE_AUTOUPDATER=1` in
   the `Dockerfile` base). In-container self-update can't work — global npm install
   is root-owned but the process is non-root (EACCES), and `--rm` would discard it
@@ -98,19 +100,21 @@ env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_GITCONFIG`,
   that env var to pin an exact version). `just doctor` shows the image's version.
 - **Extra host files beyond `$PWD`.** The launcher bind-mounts `$PWD → /workspace`
   only. To expose more host dirs, list them (one path per line) in
-  `~/.claude-<flavor>.mounts`; each is mounted at `/mnt/approved/<basename>`,
+  `~/.config/vida-claude-container/<flavor>/mounts`; each is mounted at
+  `/mnt/approved/<basename>`,
   **read-only** by default (append ` :rw` to a line to allow edits). They are then
   reachable by Claude's native Read/Write/Grep/Bash — no MCP needed, since the
   bind mount is itself the access boundary.
 - **Git identity is seeded, not inherited.** The launcher writes
-  `~/.claude-<flavor>.gitconfig` (prefilled from host `git config`), mounts it ro at
+  `~/.config/vida-claude-container/<flavor>/gitconfig` (prefilled from host
+  `git config`), mounts it ro at
   `~/.gitconfig-identity`, and the entrypoint generates a writable `~/.gitconfig`
   that includes it. The host `~/.gitconfig` is not mounted directly.
 - **`gh` auth is a resolved token, not a mount.** The launcher injects
   `GH_TOKEN=$(gh auth token)` from the host (keyring-safe). The entrypoint runs
   `gh auth setup-git` for HTTPS push.
 - **Commit signing is off by default.** Enable SSH signing in
-  `~/.claude-<flavor>.gitconfig` and forward the agent with the shell var
+  `~/.config/vida-claude-container/<flavor>/gitconfig` and forward the agent with the shell var
   `CLAUDE_FORWARD_SSH_AGENT=1` (macOS needs `launchctl setenv SSH_AUTH_SOCK …`
   before Docker Desktop starts).
 - **Hadolint.** `GOOGLE_APPLICATION_CREDENTIALS` is exported at runtime by the

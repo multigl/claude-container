@@ -26,7 +26,8 @@ claude-gateway    # routed through your LLM gateway
 - **Pinned config.** Project, region, gateway URL, and model IDs are baked into
   the image — no interactive `/login` ritual on every machine.
 - **Flavors don't collide.** Each flavor keeps its own state under
-  `~/.claude-vertex/` vs `~/.claude-gateway/`.
+  `~/.local/state/vida-claude-container/vertex/` vs
+  `~/.local/state/vida-claude-container/gateway/`.
 
 ## How the two flavors share one build
 
@@ -83,8 +84,8 @@ just build-gateway              # (optionally bake a default URL with
                                 #  docker build --target gateway
                                 #    --build-arg GATEWAY_BASE_URL=https://gateway.internal ...)
 
-FLAVOR=gateway just auth        # seeds ~/.claude-gateway.env on first run
-$EDITOR ~/.claude-gateway.env   # set OKTA_CLIENT_ID + ANTHROPIC_BASE_URL
+FLAVOR=gateway just auth        # seeds ~/.config/vida-claude-container/gateway/env
+$EDITOR ~/.config/vida-claude-container/gateway/env   # set OKTA_CLIENT_ID + ANTHROPIC_BASE_URL
 FLAVOR=gateway just auth        # Okta device login — approve the URL in your browser
 
 cd ~/vida/dbt
@@ -137,15 +138,18 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 Shared by both flavors:
 
 - **Per-user state** (`settings.json`, `shell-snapshots`, …) lives in host
-  `~/.claude-<flavor>/`, separate from `~/.claude`, so the regular host `claude`
-  is never touched and the two flavors don't collide.
+  `~/.local/state/vida-claude-container/<flavor>/claude/`, separate from
+  `~/.claude`, so the regular host `claude` is never touched and the two
+  flavors don't collide.
 - **Pre-seeded config.** On first launch the entrypoint copies the baked-in
   baseline from `/opt/claude-seed/` (common bits from `seed-common/`, plus the
-  flavor's `settings.json`) into the empty `~/.claude-<flavor>/`. Seeding is
+  flavor's `settings.json`) into the empty
+  `~/.local/state/vida-claude-container/<flavor>/claude/`. Seeding is
   idempotent (`rsync --ignore-existing`), so edits survive future starts. To push
   updated seed files (e.g. a new `settings.json` or plugin) into an existing config
   dir, `FLAVOR=<flavor> just reseed` overwrites just those files and keeps your
-  history/projects. Re-seed from scratch: `rm -rf ~/.claude-<flavor>`.
+  history/projects. Re-seed from scratch:
+  `rm -rf ~/.local/state/vida-claude-container/<flavor>`.
 - **MCP servers** (atlassian, context7) are defined in `seed-common/dotclaude.json`.
   Credentials can come from the flavor env file or be grafted read-only from your
   host `~/.claude.json`.
@@ -154,7 +158,8 @@ Shared by both flavors:
 
 The container uses your **host** git/GitHub setup — no second login.
 
-- **Identity.** On first launch the wrapper seeds `~/.claude-<flavor>.gitconfig`,
+- **Identity.** On first launch the wrapper seeds
+  `~/.config/vida-claude-container/<flavor>/gitconfig`,
   prefilled from your host `git config` (resolved in the repo dir, so folder-scoped
   `includeIf` values are honored). Edit it freely; it persists. Delete it to
   re-seed. It's mounted read-only and included by the container's generated
@@ -165,7 +170,7 @@ The container uses your **host** git/GitHub setup — no second login.
   as `GH_TOKEN`. `gh pr`/`gh api` work, and `gh` is registered as the HTTPS git
   credential helper so HTTPS `git push` works. SSH remotes are unaffected.
 - **Commit signing is OFF by default** (avoids GPG/YubiKey/agent friction). To sign
-  with SSH: in `~/.claude-<flavor>.gitconfig` set `signingkey` to your SSH signing
+  with SSH: in `~/.config/vida-claude-container/<flavor>/gitconfig` set `signingkey` to your SSH signing
   public key and uncomment the `[gpg] format = ssh` and `[commit] gpgsign = true`
   blocks, then launch with the agent forwarded (below).
 - **SSH agent forwarding (opt-in)** — for SSH signing and SSH `git push`:
@@ -186,7 +191,7 @@ Wrapper files live in an XDG split under the `vida-claude-container` namespace:
 
     $XDG_CONFIG_HOME/vida-claude-container/<flavor>/   # you edit these; back them up
     ├── env                     # MCP creds / endpoints (chmod 600)
-    ├── mounts                  # extra host dirs to expose (see below)
+    ├── mounts                  # extra host dirs to expose (one host path per line; see CLAUDE.md for the format)
     ├── gitconfig               # git identity used in the container (chmod 600)
     └── settings.override.json  # optional Claude settings deltas, e.g. {"model": "..."}
 
@@ -233,8 +238,8 @@ The gateway flavor is a generic Anthropic-format client pointed at your gateway.
 | `ENABLE_TOOL_SEARCH`             | `true`                               | Re-enables MCP tool search, which Claude disables by default against a non-first-party base URL. |
 | `ANTHROPIC_MODEL` + `ANTHROPIC_DEFAULT_*_MODEL` | placeholders (`claude-opus-4-6`, …) | Set to the `model_name` strings your gateway exposes. |
 | `apiKeyHelper`                   | `/opt/claude/api-key-helper`         | Baked Okta helper (`gateway/okta_token_helper.py`, python3-only). Mints/refreshes an Okta **id_token** (JWT); token cache lives in the `claude-gateway-okta` docker volume. |
-| `OKTA_ISSUER`                    | `https://vida.okta.com`              | Okta **Org** authorization server (no `/oauth2/<id>`). Set in `~/.claude-gateway.env`. |
-| `OKTA_CLIENT_ID`                 | —                                    | The Okta **Native app** `client_id`; must equal LiteLLM's `JWT_AUDIENCE`. Set in `~/.claude-gateway.env`. |
+| `OKTA_ISSUER`                    | `https://vida.okta.com`              | Okta **Org** authorization server (no `/oauth2/<id>`). Set in `~/.config/vida-claude-container/gateway/env`. |
+| `OKTA_CLIENT_ID`                 | —                                    | The Okta **Native app** `client_id`; must equal LiteLLM's `JWT_AUDIENCE`. Set in `~/.config/vida-claude-container/gateway/env`. |
 
 **Auth (one-time device login).** `FLAVOR=gateway just auth` runs the baked helper
 with `--login-only`: it prints an Okta verification URL (approve it in your host
@@ -248,7 +253,7 @@ on HTTP 401); Claude sends the `id_token` as the bearer. Refresh tokens expire a
 `https://vida.okta.com/oauth2/v1/keys`. (Vida's Okta has only the Org server, which
 issues ID tokens — not custom-API access tokens — hence the id_token-as-bearer design.)
 
-**Env file (`~/.claude-gateway.env`).** Holds `OKTA_ISSUER`, `OKTA_CLIENT_ID`,
+**Env file (`~/.config/vida-claude-container/gateway/env`).** Holds `OKTA_ISSUER`, `OKTA_CLIENT_ID`,
 `ANTHROPIC_BASE_URL`, and `CLAUDE_CODE_API_KEY_HELPER_TTL_MS`, passed into the
 container via `--env-file` so the helper reads them. Vars set only in `settings.json`
 do **not** reach the helper.
@@ -286,7 +291,8 @@ Run `/status` inside Claude:
 ## Troubleshooting
 
 **`/status` shows the wrong provider** — stale state under
-`~/.claude-<flavor>/`. Try `rm -rf ~/.claude-<flavor>` and relaunch.
+`~/.local/state/vida-claude-container/<flavor>/`. Try
+`rm -rf ~/.local/state/vida-claude-container/<flavor>` and relaunch.
 
 **vertex: `just auth` fails with browser/URL issues** —
 `just reset-auth && just auth`.
@@ -312,7 +318,7 @@ just uninstall                  # remove both wrapper symlinks
 FLAVOR=gateway just clean       # remove gateway image
 just clean                      # remove vertex image
 just reset-auth                 # wipe gcloud creds volume
-rm -rf ~/.claude-vertex ~/.claude-gateway
+rm -rf ~/.config/vida-claude-container ~/.local/state/vida-claude-container
 ```
 
 ## License

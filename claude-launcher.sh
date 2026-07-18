@@ -12,9 +12,10 @@
 #   claude-vertex auth        # one-time gcloud ADC login (vertex only)
 #   claude-<flavor> -- <args> # pass extra args to `claude`
 #
-# Nothing touches host ~/.zshrc or host ~/.config/gcloud. Per-flavor state
-# lives in host ~/.claude-<flavor>/, kept separate from ~/.claude so the host's
-# regular Anthropic-API claude is untouched and the two flavors never collide.
+# Nothing touches host ~/.zshrc or host ~/.config/gcloud. Per-flavor state lives
+# under $XDG_STATE_HOME/vida-claude-container/<flavor>/ and config under
+# $XDG_CONFIG_HOME/vida-claude-container/<flavor>/, kept separate from ~/.claude
+# so the host's regular Anthropic-API claude is untouched and the flavors never collide.
 set -euo pipefail
 
 case "$(basename "$0")" in

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Seed /home/claude/.claude (bind-mounted from host ~/.claude-vertex) from
+# Seed /home/claude/.claude (bind-mounted from the host state dir, e.g.
+# ~/.local/state/vida-claude-container/<flavor>/claude) from
 # the image's /opt/claude-seed payload on first launch. Idempotent: existing
 # files are preserved so user edits and prior plugin installs survive.
 #
@@ -96,7 +97,7 @@ fi
 
 # Ensure the container's mcpServers block always matches the seed's --
 # container's command paths and server definitions are authoritative; host
-# only contributes credentials. Without this, an older ~/.claude-vertex.json
+# only contributes credentials. Without this, an older host claude.json
 # from a prior run could be missing the mcpServers skeleton entirely.
 if [[ -f "$SEED/dotclaude.json" ]] && command -v jq >/dev/null 2>&1; then
     tmp="$(mktemp)"
@@ -113,7 +114,7 @@ fi
 # container keeps its own `command` paths (host paths like /opt/homebrew/bin
 # don't exist in the image) and any servers the host has that the container
 # doesn't are ignored. Lets you keep MCP credentials in one place on the
-# host instead of duplicating them in ~/.claude-vertex.env. Re-applied every
+# host instead of duplicating them in the config `env` file. Re-applied every
 # launch so host edits propagate.
 HOST_DOTCLAUDE_RO=/home/claude/.host-claude.json
 if [[ -f "$HOST_DOTCLAUDE_RO" ]] && command -v jq >/dev/null 2>&1; then
