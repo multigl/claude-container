@@ -80,4 +80,30 @@ if [[ -n "$keyA" && -n "$keyB" && "$keyA" != "$keyB" ]]; then collide=distinct; 
 assert_eq "distinct" "$collide" "hyphenated paths do not collide onto one PROJECT_KEY"
 rm -rf "$hA" "$hB" "$cbase"
 
+# --- env-file seeding: vertex flavor gets model/region pins, gateway does not ---
+# The env seed block runs past the --print-paths early exit, so drive the launcher
+# with a stub `docker` (exits 0) in an isolated HOME: seeding happens before any
+# docker call, the stubbed run/volume calls no-op, and we inspect the seeded file.
+seed_env() {  # seed_env FLAVOR  -> prints seeded env-file contents
+    local flavor="$1" home bin
+    home="$(mktemp -d)"; bin="$(mktemp -d)"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/docker"; chmod +x "$bin/docker"
+    env -i HOME="$home" PATH="$bin:$PATH" CLAUDE_FLAVOR="$flavor" \
+        bash "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
+    cat "$home/.config/vida-claude-container/$flavor/env" 2>/dev/null
+    rm -rf "$home" "$bin"
+}
+
+venv="$(seed_env vertex)"
+assert_contains "$venv" "ANTHROPIC_MODEL=claude-opus-4-8[1m]"            "vertex env seeds opus 1m primary"
+assert_contains "$venv" "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5" "vertex env seeds sonnet-5 pin"
+assert_contains "$venv" "ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5" "vertex env seeds haiku pin"
+assert_contains "$venv" "VERTEX_REGION_CLAUDE_HAIKU_4_5=us-east5"        "vertex env seeds haiku us-east5 override"
+assert_contains "$venv" "CLOUD_ML_REGION=us"                            "vertex env seeds us multi-region"
+
+genv="$(seed_env gateway)"
+if [[ "$genv" == *"VERTEX_REGION_CLAUDE_HAIKU_4_5"* ]]; then g=present; else g=absent; fi
+assert_eq "absent" "$g" "gateway env has no vertex model/region block"
+assert_contains "$genv" "OKTA_ISSUER=" "gateway env still seeds the gateway block"
+
 finish

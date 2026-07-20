@@ -74,6 +74,18 @@ files (settings + plugins) while preserving history/projects. The `mcpServers`
 block is force-synced from the seed each launch, then `env`/`headers` creds are
 grafted read-only from the host `~/.claude.json` (mounted at `.host-claude.json`).
 
+The `env` file is seeded per-flavor **only when absent** (not by `reseed`), with
+real values, not blanks. The **vertex** flavor seeds model + region pins
+(`ANTHROPIC_MODEL=claude-opus-4-8[1m]`, `…_SONNET_MODEL=claude-sonnet-5`,
+`…_HAIKU_MODEL=claude-haiku-4-5`, `CLOUD_ML_REGION=us`,
+`VERTEX_REGION_CLAUDE_HAIKU_4_5=us-east5`). All US (Vida compliance): opus/sonnet
+on the `us` multi-region, haiku on `us-east5`. Pinning is load-bearing — unpinned,
+the Vertex small/fast model defaults to `claude-sonnet-4-5` (429s if unprovisioned;
+powers background titles + web-search summarization) and the 1M window is lost
+(`[1m]` suffix; Sonnet 5 is always 1M). Existing installs hand-add these to the
+live env file — `reseed` won't rewrite it. Env is read once at `docker run`, so an
+edit needs a session kill+reopen.
+
 Host-side wrapper files live in an XDG split (namespace `vida-claude-container`):
 config the user hand-edits under `$XDG_CONFIG_HOME/vida-claude-container/<flavor>/`
 (`env`, `mounts`, `gitconfig`, `settings.override.json`), and machine-managed state

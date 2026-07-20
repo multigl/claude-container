@@ -268,20 +268,36 @@ do **not** reach the helper.
 
 ## Vertex configuration
 
-The defaults match Vida's Confluence guide:
+The image sets the provider basics; the **model + region pins live in the seeded
+env file** (`~/.config/vida-claude-container/vertex/env`), passed in via
+`--env-file` (which overrides image ENV).
 
-| Var                              | Default                          |
-|----------------------------------|----------------------------------|
-| `CLAUDE_CODE_USE_VERTEX`         | `1`                              |
-| `ANTHROPIC_VERTEX_PROJECT_ID`    | `vertex-test-495715`             |
-| `CLOUD_ML_REGION`                | `us-east5`                       |
-| `ANTHROPIC_MODEL`                | `claude-opus-4-6`                |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `claude-sonnet-4-6[1m]`          |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL`   | `claude-opus-4-6`                |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL`  | `claude-haiku-4-5@20251001`      |
+| Var                              | Value                     | Where                 |
+|----------------------------------|---------------------------|-----------------------|
+| `CLAUDE_CODE_USE_VERTEX`         | `1`                       | image ENV             |
+| `ANTHROPIC_VERTEX_PROJECT_ID`    | `vertex-test-495715`      | image ENV             |
+| `CLOUD_ML_REGION`                | `us`                      | image ENV + env file  |
+| `ANTHROPIC_MODEL`                | `claude-opus-4-8[1m]`     | seeded env file       |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL`   | `claude-opus-4-8[1m]`     | seeded env file       |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `claude-sonnet-5`         | seeded env file       |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL`  | `claude-haiku-4-5`        | seeded env file       |
+| `VERTEX_REGION_CLAUDE_HAIKU_4_5` | `us-east5`                | seeded env file       |
 
-Override per-invocation by exporting env (the wrapper passes it through), or
-permanently by editing the `Dockerfile` and rebuilding.
+**US-only (Vida compliance).** Opus 4.8 + Sonnet 5 aren't served on single
+regions like `us-east5`; they need `global`/multi-region, so they ride the `us`
+multi-region. Haiku 4.5 → `us-east5` via the per-model override (also US). Never
+route to a non-US region.
+
+**Why pin.** Unpinned on Vertex, the small/fast (background) model defaults to
+`claude-sonnet-4-5` — which `429`s if your project can't invoke it, and it powers
+session titles + web-search summarization. Pinning the aliases removes that reach.
+Pinning also restores the **1M context window**: append `[1m]` to a model ID
+(Opus 4.8 here); Sonnet 5 always runs 1M, no suffix.
+
+Override per-invocation by exporting env (the wrapper passes it through), or edit
+the env file. **Existing installs:** the env file is seeded only when absent and
+`reseed` does not rewrite it — hand-add the rows above to your live env file, then
+kill and reopen the session (env is read once at `docker run`).
 
 ## Verifying which provider you're on
 
