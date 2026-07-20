@@ -148,24 +148,16 @@ fi
 
 # Seed the git identity file once, prefilled from the host's effective identity
 # resolved in $PWD (so folder-scoped includeIf values are honored). Editable and
-# persistent thereafter; delete it to re-seed. gpgsign is off by default (the
-# signing blocks ship commented out).
+# persistent thereafter; delete it to re-seed.
 if [[ ! -f "$HOST_GITCONFIG" ]]; then
     _git_name="$(git -C "$PWD" config --get user.name  2>/dev/null || true)"
     _git_email="$(git -C "$PWD" config --get user.email 2>/dev/null || true)"
     cat > "$HOST_GITCONFIG" <<EOF
 # claude-${FLAVOR}: git identity used INSIDE the container. Prefilled from your
 # host git config; edit freely (persists across sessions; delete to re-seed).
-# To enable SSH commit signing: set signingkey to your SSH signing public key,
-# uncomment the [gpg]/[commit] blocks, and launch with CLAUDE_FORWARD_SSH_AGENT=1.
 [user]
     name = ${_git_name}
     email = ${_git_email}
-    # signingkey = ssh-ed25519 AAAA...
-# [gpg]
-#     format = ssh
-# [commit]
-#     gpgsign = true
 EOF
     chmod 600 "$HOST_GITCONFIG"
 fi
@@ -205,27 +197,9 @@ run_in_container() {
         _gh_token="$(gh auth token 2>/dev/null || true)"
         [[ -n "$_gh_token" ]] && extra_flags+=(-e "GH_TOKEN=$_gh_token")
     fi
-    # Opt-in SSH agent forwarding: enables SSH commit signing + SSH git push using
-    # the host agent (e.g. 1Password). Set CLAUDE_FORWARD_SSH_AGENT=1 in your shell.
-    # macOS/Docker Desktop can't bind-mount a host socket directly -- it uses the
-    # synthesized /run/host-services/ssh-auth.sock (requires the host to have run
-    # `launchctl setenv SSH_AUTH_SOCK <1p-agent.sock>` before Docker Desktop start).
-    if [[ -n "${CLAUDE_FORWARD_SSH_AGENT:-}" ]]; then
-        if [[ "$(uname)" == "Darwin" ]]; then
-            extra_flags+=(--mount "type=bind,src=/run/host-services/ssh-auth.sock,target=/ssh-agent")
-            extra_flags+=(-e "SSH_AUTH_SOCK=/ssh-agent")
-        elif [[ -n "${SSH_AUTH_SOCK:-}" ]]; then
-            extra_flags+=(-v "$SSH_AUTH_SOCK:/ssh-agent")
-            extra_flags+=(-e "SSH_AUTH_SOCK=/ssh-agent")
-        else
-            echo ">> CLAUDE_FORWARD_SSH_AGENT set but SSH_AUTH_SOCK is empty; skipping agent forward" >&2
-        fi
-    fi
-    # Optional: host ssh keys + known_hosts so `git push` over SSH works.
-    # Read-only; new host fingerprints can't be saved across runs.
-    if [[ -d "$HOME/.ssh" ]]; then
-        extra_flags+=(-v "$HOME/.ssh:/home/claude/.ssh:ro")
-    fi
+    # NOTE: SSH agent forwarding / host key mounting is intentionally NOT wired
+    # here. It is being redesigned as a cross-platform (docker/podman/apple)
+    # bring-your-own-provider feature. Until then, push over HTTPS (GH_TOKEN above).
     # Optional: host ~/.claude.json (the Anthropic-API claude's config) mounted
     # read-only so the entrypoint can graft its `mcpServers` block into the
     # container's separate ~/.claude.json. Keeps MCP credentials in one place

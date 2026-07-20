@@ -36,9 +36,8 @@ fi
 mkdir -p "$DEST"
 [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && mkdir -p "$GCLOUD_DIR"
 # Only chown the writable bind-mounts we actually need to own. A blanket
-# `chown -R /home/claude` would traverse host-mounted ~/.gitconfig and
-# ~/.ssh (mounted :ro) and fail with EROFS, killing the container under
-# set -e.
+# `chown -R /home/claude` would traverse the ro host-mounted ~/.gitconfig-identity
+# and fail with EROFS, killing the container under set -e.
 chown claude:claude /home/claude
 chown -R claude:claude "$DEST"
 [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && chown -R claude:claude "$GCLOUD_DIR"
@@ -215,9 +214,7 @@ fi
 # --- git identity + gh credential helper -------------------------------------
 # Write a container-owned ~/.gitconfig that INCLUDES the launcher-seeded, ro
 # identity file (mounted at ~/.gitconfig-identity). git ignores the include if the
-# path is absent, so this is safe when no identity was seeded. Signing intent
-# (gpg.format/signingkey/commit.gpgsign) lives in the identity file and is off
-# unless the engineer enables it there.
+# path is absent, so this is safe when no identity was seeded.
 GITCONFIG=/home/claude/.gitconfig
 cat > "$GITCONFIG" <<'EOF'
 [include]

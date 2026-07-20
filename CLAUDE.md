@@ -153,10 +153,11 @@ key you migrate from.
 - **`gh` auth is a resolved token, not a mount.** The launcher injects
   `GH_TOKEN=$(gh auth token)` from the host (keyring-safe). The entrypoint runs
   `gh auth setup-git` for HTTPS push.
-- **Commit signing is off by default.** Enable SSH signing in
-  `~/.config/vida-claude-container/<flavor>/gitconfig` and forward the agent with the shell var
-  `CLAUDE_FORWARD_SSH_AGENT=1` (macOS needs `launchctl setenv SSH_AUTH_SOCK …`
-  before Docker Desktop starts).
+- **SSH agent forwarding / commit signing is not wired.** It was removed pending a
+  cross-platform (docker/podman/apple-container) bring-your-own-provider redesign.
+  Push over HTTPS (`GH_TOKEN`) until then. Background: Docker Desktop's
+  `host-services` agent bridge does not forward the 1Password agent (Apple
+  `container --ssh` does) — the reason the socket-mount approach was dropped.
 - **Hadolint.** `GOOGLE_APPLICATION_CREDENTIALS` is exported at runtime by the
   entrypoint, not baked as `ENV`, to avoid the `SecretsUsedInArgOrEnv` warning on
   the `*_CREDENTIALS` name pattern.
