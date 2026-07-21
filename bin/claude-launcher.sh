@@ -308,8 +308,15 @@ case "${1:-}" in
         # Refuses only if the target already holds data. The pre-feature bucket
         # lives INSIDE the ~/.claude mount ($STATE_CLAUDE_DIR/projects/-workspace), not at
         # the new sibling $STATE_DIR/projects/ location.
+        #
+        # NOTE: docker recreates $_legacy as an EMPTY mountpoint stub on every run,
+        # because the per-repo bind mount nests at ~/.claude/projects/-workspace
+        # (inside the $STATE_CLAUDE_DIR mount). So "-d" alone is not "has legacy
+        # data" -- an empty stub is nothing to migrate. Treat empty as absent and
+        # tidy the stub, else migrate would hit the target-non-empty refusal below.
         _legacy="$STATE_CLAUDE_DIR/projects/-workspace"
-        if [[ ! -d "$_legacy" ]]; then
+        if [[ ! -d "$_legacy" || -z "$(ls -A "$_legacy" 2>/dev/null)" ]]; then
+            rmdir "$_legacy" 2>/dev/null || true
             echo ">> no legacy bucket at $_legacy; nothing to migrate"
             exit 0
         fi

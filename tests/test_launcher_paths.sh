@@ -106,4 +106,43 @@ if [[ "$genv" == *"VERTEX_REGION_CLAUDE_HAIKU_4_5"* ]]; then g=present; else g=a
 assert_eq "absent" "$g" "gateway env has no vertex model/region block"
 assert_contains "$genv" "OKTA_ISSUER=" "gateway env still seeds the gateway block"
 
+# --- migrate-memory: empty docker mountpoint stub must not false-trigger ---
+# The per-repo bind mount nests at ~/.claude/projects/-workspace (inside the
+# $STATE_CLAUDE_DIR mount), so docker recreates that path as an EMPTY mountpoint
+# stub on every run. migrate-memory must treat an empty legacy dir as
+# nothing-to-migrate (and tidy the stub), not collide with the populated target.
+migrate_run() {  # migrate_run HOME  -> prints merged stdout+stderr
+    # migrate-memory is host-side, but the launcher's shared setup touches docker
+    # before dispatch, so stub it (exits 0) like seed_env does.
+    local bin; bin="$(mktemp -d)"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/docker"; chmod +x "$bin/docker"
+    env -i HOME="$1" PATH="$bin:$PATH" CLAUDE_FLAVOR=vertex \
+        bash "$LAUNCHER" migrate-memory </dev/null 2>&1
+    rm -rf "$bin"
+}
+
+# empty stub -> "nothing to migrate", stub removed
+h="$(mktemp -d)"
+legacy="$h/.local/state/vida-claude-container/vertex/claude/projects/-workspace"
+mkdir -p "$legacy"
+out="$(migrate_run "$h")"
+assert_contains "$out" "nothing to migrate" "empty legacy stub: nothing to migrate"
+if [[ -d "$legacy" ]]; then s=present; else s=gone; fi
+assert_eq "gone" "$s" "empty legacy stub tidied away"
+rm -rf "$h"
+
+# real legacy data -> migrated into the per-repo key, source emptied
+h="$(mktemp -d)"
+legacy="$h/.local/state/vida-claude-container/vertex/claude/projects/-workspace"
+mkdir -p "$legacy/memory"
+printf 'fact\n' > "$legacy/memory/f.md"
+out="$(migrate_run "$h")"
+assert_contains "$out" "migrated" "real legacy data: migrated"
+if [[ -e "$legacy/memory/f.md" ]]; then l=present; else l=gone; fi
+assert_eq "gone" "$l" "legacy source moved out"
+moved="$(find "$h/.local/state/vida-claude-container/vertex/projects" -name f.md 2>/dev/null | head -1)"
+if [[ -n "$moved" ]]; then m=found; else m=missing; fi
+assert_eq "found" "$m" "fact landed under per-repo key"
+rm -rf "$h"
+
 finish

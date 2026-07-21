@@ -121,9 +121,13 @@ repair: `claude-<flavor> rebuild-memory-index`.
 
 Migration from the pre-fix shared bucket: `claude-<flavor> migrate-memory` (run
 once, from the owning repo) moves `projects/-workspace` to this repo's key;
-`just doctor` warns while the legacy bucket remains. Pre-fix history was
+`just doctor` warns while the legacy bucket holds data. Pre-fix history was
 commingled across repos and cannot be de-mixed — it lands wholesale under the
-key you migrate from.
+key you migrate from. Note: docker recreates `$STATE_CLAUDE_DIR/projects/-workspace`
+as an **empty mountpoint stub** on every run (the per-repo bind mount nests
+inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
+`migrate-memory` test the legacy dir for *content* (`ls -A`), not mere existence
+— an empty stub is "no legacy bucket" and `migrate-memory` tidies it away.
 
 ## Conventions & gotchas
 

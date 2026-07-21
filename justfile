@@ -138,7 +138,7 @@ doctor:
     @paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh --print-paths)"; \
         STATE_CLAUDE_DIR="$(printf '%s\n' "$paths" | sed -n 's/^STATE_CLAUDE_DIR=//p')"; \
         echo "  global tier: $STATE_CLAUDE_DIR/memory-global"; \
-        if [ -d "$STATE_CLAUDE_DIR/projects/-workspace" ]; then \
+        if [ -n "$(ls -A "$STATE_CLAUDE_DIR/projects/-workspace" 2>/dev/null)" ]; then \
             echo "  WARN: legacy shared bucket present ($STATE_CLAUDE_DIR/projects/-workspace)"; \
             echo "        run 'claude-{{flavor}} migrate-memory' from the owning repo"; \
         else echo "  ok: no legacy shared bucket"; fi
