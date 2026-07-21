@@ -87,7 +87,7 @@ RUN userdel -r node 2>/dev/null || true \
 
 # Default statusline at a flavor-neutral path. Wrapper script mounts a host
 # override onto this same path if ~/.claude/statusline-command.sh exists.
-COPY statusline.sh /opt/claude/statusline.sh
+COPY bin/statusline.sh /opt/claude/statusline.sh
 RUN chmod +x /opt/claude/statusline.sh
 
 # Settings-override merge helper, invoked by the entrypoint each launch.
@@ -98,7 +98,7 @@ RUN chmod +x /opt/claude/merge-settings.sh
 COPY bin/rebuild-memory-index.sh /opt/claude/rebuild-memory-index.sh
 RUN chmod +x /opt/claude/rebuild-memory-index.sh
 
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 WORKDIR /workspace

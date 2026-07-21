@@ -43,7 +43,7 @@ plugin seed, the `claude` user, the entrypoint). Each flavor stage adds only its
 own payload, so the gateway image carries no gcloud and the vertex image keeps
 its Vertex pins. Build a flavor with `docker build --target <flavor>`.
 
-The host wrapper is a single script, `claude-launcher.sh`, symlinked to both
+The host wrapper is a single script, `bin/claude-launcher.sh`, symlinked to both
 `claude-vertex` and `claude-gateway`; it picks its flavor from the name it was
 invoked as (override with `CLAUDE_FLAVOR=...`).
 

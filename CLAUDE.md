@@ -27,18 +27,20 @@ base ─┬─► vertex    (adds google-cloud-cli + Vertex ENV)
 
 `base` holds everything shared (node, claude-code, uv + mcp-atlassian, the plugin
 seed, the non-root `claude` user, the entrypoint). Build a flavor with
-`docker build --target <flavor>`. The host wrapper `claude-launcher.sh` is
+`docker build --target <flavor>`. The host wrapper `bin/claude-launcher.sh` is
 symlinked to `claude-vertex` / `claude-gateway` and picks its flavor from the name
 it was invoked as (override with `CLAUDE_FLAVOR=...`).
 
 ## Key files
 
 - `Dockerfile` — multi-stage build (`base`, `vertex`, `gateway`).
-- `claude-launcher.sh` — host wrapper; assembles the `docker run` (mounts, env,
+- `bin/claude-launcher.sh` — host wrapper; assembles the `docker run` (mounts, env,
   auth volumes) and dispatches subcommands (`auth`, `shell`, `reseed`, `--`).
-- `docker-entrypoint.sh` — runs as root to chown bind mounts + remap `claude` to
+- `bin/docker-entrypoint.sh` — runs as root to chown bind mounts + remap `claude` to
   the host UID/GID, seeds `~/.claude`, grafts MCP config/creds, then drops to
   `claude` via `gosu`.
+- `bin/statusline.sh` — default statusline (baked at `/opt/claude/statusline.sh`;
+  a host `~/.claude/statusline-command.sh` overrides it via a launcher mount).
 - `justfile` — build / install / auth / run / doctor / **update** recipes.
 - `seed-common/` — flavor-neutral seed payload (incl. `dotclaude.json` with the
   atlassian + context7 `mcpServers`); overlaid per flavor by `seed-{vertex,gateway}/`.

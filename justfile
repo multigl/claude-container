@@ -54,7 +54,7 @@ rebuild-all:
 
 # One-time login for {{flavor}} (gcloud ADC, or Okta device login) -> docker volume
 auth:
-    CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh auth
+    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh auth
 
 # Run all test suites: gateway Okta helper (pytest) + bash suites (merge, paths)
 test:
@@ -63,28 +63,28 @@ test:
 
 # Run `claude` against the current directory (uses {{flavor}})
 run:
-    CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh
+    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh
 
 # Open a bash shell inside the container
 shell:
-    CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh shell
+    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh shell
 
 # Overwrite host config's seeded files (settings + plugins) from the image
 reseed:
-    CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh reseed
+    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh reseed
 
 # Symlink wrapper to {{bin_dir}}/claude-{{flavor}}
 install:
     mkdir -p {{bin_dir}}
-    ln -sf {{here}}/claude-launcher.sh {{bin_dir}}/claude-{{flavor}}
+    ln -sf {{here}}/bin/claude-launcher.sh {{bin_dir}}/claude-{{flavor}}
     @echo "installed: {{bin_dir}}/claude-{{flavor}}"
     @echo "ensure {{bin_dir}} is on PATH"
 
 # Symlink BOTH flavor commands (claude-vertex + claude-gateway) to the launcher
 install-all:
     mkdir -p {{bin_dir}}
-    ln -sf {{here}}/claude-launcher.sh {{bin_dir}}/claude-vertex
-    ln -sf {{here}}/claude-launcher.sh {{bin_dir}}/claude-gateway
+    ln -sf {{here}}/bin/claude-launcher.sh {{bin_dir}}/claude-vertex
+    ln -sf {{here}}/bin/claude-launcher.sh {{bin_dir}}/claude-gateway
     @echo "installed: {{bin_dir}}/claude-vertex and {{bin_dir}}/claude-gateway"
     @echo "ensure {{bin_dir}} is on PATH"
 
@@ -135,7 +135,7 @@ doctor:
         && echo "  ok: $(command -v claude-{{flavor}})" \
         || echo "  MISSING: run 'just install' (or add {{bin_dir}} to PATH)"
     @echo "== memory ({{flavor}}) =="
-    @paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/claude-launcher.sh --print-paths)"; \
+    @paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh --print-paths)"; \
         STATE_CLAUDE_DIR="$(printf '%s\n' "$paths" | sed -n 's/^STATE_CLAUDE_DIR=//p')"; \
         echo "  global tier: $STATE_CLAUDE_DIR/memory-global"; \
         if [ -d "$STATE_CLAUDE_DIR/projects/-workspace" ]; then \

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Tests for claude-launcher.sh --print-paths (pure path resolution, no side effects)
+# Tests for bin/claude-launcher.sh --print-paths (pure path resolution, no side effects)
 cd "$(dirname "$0")"
 source ./lib.sh
-LAUNCHER="$(pwd)/../claude-launcher.sh"
+LAUNCHER="$(pwd)/../bin/claude-launcher.sh"
 
 # Run --print-paths in an isolated HOME with a controlled env. Prints
 # "<scratchHOME>\n<launcher output>"; caller checks emptiness then removes the dir.
