@@ -190,8 +190,8 @@ Wrapper files live in an XDG split under the `vida-claude-container` namespace:
 
     $XDG_STATE_HOME/vida-claude-container/<flavor>/    # machine-managed; disposable
     ├── claude/                 # seeded config -> container ~/.claude
+    │   ├── claude.json         # trust flags, mcpServers, grafted MCP creds (container ~/.claude.json, symlinked)
     │   └── memory-global/      # per-flavor global memory tier (cross-project facts)
-    ├── claude.json             # trust flags, mcpServers, grafted MCP creds
     └── projects/<key>/         # per-repo memory + /resume history, keyed on host $PWD
                                  # (see `claude-<flavor> migrate-memory` / `rebuild-memory-index`)
 
@@ -222,7 +222,8 @@ migration; move them by hand once (per flavor):
     mv ~/.claude-$flavor.mounts    "$cfg/mounts"     2>/dev/null || true
     mv ~/.claude-$flavor.gitconfig "$cfg/gitconfig"  2>/dev/null || true
     mv ~/.claude-$flavor          "$state/claude"    2>/dev/null || true
-    mv ~/.claude-$flavor.json     "$state/claude.json" 2>/dev/null || true
+    mkdir -p "$state/claude"
+    mv ~/.claude-$flavor.json     "$state/claude/claude.json" 2>/dev/null || true
 
 ## Gateway configuration
 

@@ -40,7 +40,8 @@ it was invoked as (override with `CLAUDE_FLAVOR=...`).
   the host UID/GID, seeds `~/.claude`, grafts MCP config/creds, then drops to
   `claude` via `gosu`.
 - `bin/statusline.sh` — default statusline (baked at `/opt/claude/statusline.sh`;
-  a host `~/.claude/statusline-command.sh` overrides it via a launcher mount).
+  a host `~/.claude/statusline-command.sh` overrides it via the per-run stage dir,
+  copied over the default at boot — see "Stage directory").
 - `justfile` — build / install / auth / run / doctor / **update** recipes.
 - `seed-common/` — flavor-neutral seed payload (incl. `dotclaude.json` with the
   atlassian + context7 `mcpServers`); overlaid per flavor by `seed-{vertex,gateway}/`.
@@ -74,7 +75,30 @@ On first launch `docker-entrypoint.sh` copies `/opt/claude-seed` → `~/.claude`
 edits survive. `CLAUDE_RESEED=1` (via `just reseed`) instead overwrites the seeded
 files (settings + plugins) while preserving history/projects. The `mcpServers`
 block is force-synced from the seed each launch, then `env`/`headers` creds are
-grafted read-only from the host `~/.claude.json` (mounted at `.host-claude.json`).
+grafted from the host `~/.claude.json` (staged read-only at
+`/opt/claude-stage/host-claude.json`; see "Stage directory" below).
+
+The container's own `~/.claude.json` (trust/onboarding flags, `mcpServers`, grafted
+creds) is stored at `…/<flavor>/claude/claude.json` — inside the `~/.claude` dir
+mount — and the entrypoint symlinks `~/.claude.json` to it. It is **not** a
+credential store in these flavors (vertex uses gcloud ADC, gateway the Okta
+apiKeyHelper); a future `/login` OAuth flavor would change that. Old installs with
+a sibling `…/<flavor>/claude.json` are auto-migrated into `claude/` on next launch.
+
+### Stage directory (no single-file bind mounts)
+
+Single-file bind mounts rot on Docker Desktop macOS (virtio-fs/gRPC-FUSE goes
+stale across host sleep/wake), so the launcher never mounts individual files. Each
+launch it assembles a per-run temp dir (`mktemp -d "$STATE_DIR/.stage.XXXXXX"`,
+removed on exit) by plain host-side `cp` of whichever inputs exist —
+`settings.override.json`, the host `~/.claude.json` (as `host-claude.json`), the
+host `~/.claude/statusline-command.sh` (as `statusline.sh`), and the git identity
+(as `gitconfig-identity`) — and mounts that dir **once** ro at `/opt/claude-stage`.
+The entrypoint consumes them at boot: merges the override, grafts MCP creds,
+inlines the git identity once, and copies the statusline over the baked default at
+`/opt/claude/statusline.sh` (it executes on every render, so it can't stay a
+mount). Host reads happen on the normal filesystem, so mount staleness can't reach
+them.
 
 The `env` file is seeded per-flavor **only when absent** (not by `reseed`), with
 real values, not blanks. The **vertex** flavor seeds model + region pins
@@ -92,7 +116,8 @@ Host-side wrapper files live in an XDG split (namespace `vida-claude-container`)
 config the user hand-edits under `$XDG_CONFIG_HOME/vida-claude-container/<flavor>/`
 (`env`, `mounts`, `gitconfig`, `settings.override.json`), and machine-managed state
 under `$XDG_STATE_HOME/vida-claude-container/<flavor>/` (`claude/` → the container's
-`~/.claude`, and `claude.json`). Defaults fall back to `~/.config` and
+`~/.claude`, which now also holds `claude/claude.json` → the container's
+symlinked `~/.claude.json`). Defaults fall back to `~/.config` and
 `~/.local/state` when the XDG vars are unset. Only config files have escape-hatch
 env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_GITCONFIG`,
 `CLAUDE_SETTINGS`); state paths follow `XDG_STATE_HOME` only.
@@ -153,15 +178,15 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   bind mount is itself the access boundary.
 - **Git identity is seeded, not inherited.** The launcher writes
   `~/.config/vida-claude-container/<flavor>/gitconfig` (prefilled from host
-  `git config`), mounts it ro at
-  `~/.gitconfig-identity`, and the entrypoint generates a writable `~/.gitconfig`
-  that **inlines** it (reads the seed once at boot, not a live `[include]`). The
-  host `~/.gitconfig` is not mounted directly. Inlining is deliberate: the ro
-  identity mount rides Docker Desktop's macOS file-share layer, which goes stale
-  across host sleep/wake; a live `[include]` of a stale single-file mount fails
-  non-ENOENT and git aborts with `bad config line N` — breaking every git call
-  and the git-based statusline. Reading once at boot confines that risk (and a
-  failed read is non-fatal — identity is skipped, git still works).
+  `git config`), stages it as `gitconfig-identity` (see "Stage directory"), and the
+  entrypoint generates a writable `~/.gitconfig` that **inlines** it (reads the
+  staged file once at boot, not a live `[include]`). The host `~/.gitconfig` is not
+  mounted directly. Inlining is deliberate: a live `[include]` of a host file that
+  becomes unreadable (a stale single-file mount, non-ENOENT) makes git abort with
+  `bad config line N` — breaking every git call and the git-based statusline.
+  Reading once at boot confines that risk (and a failed read is non-fatal —
+  identity is skipped, git still works). This is also *why* single-file mounts were
+  eliminated in favor of the stage dir.
 - **`gh` auth is a resolved token, not a mount.** The launcher injects
   `GH_TOKEN=$(gh auth token)` from the host (keyring-safe). The entrypoint runs
   `gh auth setup-git` for HTTPS push.

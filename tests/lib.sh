@@ -26,6 +26,17 @@ assert_contains() {  # assert_contains HAYSTACK NEEDLE [MSG]
     fi
 }
 
+assert_not_contains() {  # assert_not_contains HAYSTACK NEEDLE [MSG]
+    local haystack="$1" needle="$2" msg="${3:-assert_not_contains}"
+    _tests_run=$((_tests_run + 1))
+    if [[ "$haystack" != *"$needle"* ]]; then
+        printf '  ok: %s\n' "$msg"
+    else
+        _tests_failed=$((_tests_failed + 1))
+        printf '  FAIL: %s\n    unwanted: %q\n    haystack: %q\n' "$msg" "$needle" "$haystack"
+    fi
+}
+
 finish() {
     printf '%s: %d run, %d failed\n' "${0##*/}" "$_tests_run" "$_tests_failed"
     [[ "$_tests_failed" -eq 0 ]]

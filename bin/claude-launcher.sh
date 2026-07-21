@@ -36,8 +36,13 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${NS}/${FLAVOR}"
 
 # State: the .claude dir (mounted to the container's ~/.claude) + .claude.json.
 # No per-flavor override knob -- relocation follows XDG_STATE_HOME only.
+# claude.json lives INSIDE the .claude dir so it rides that (robust) directory
+# bind mount and the container can symlink ~/.claude.json to it -- avoiding a
+# fragile single-file bind mount (those rot on Docker Desktop macOS across
+# sleep/wake). Migrated from the old sibling $STATE_DIR/claude.json below.
 STATE_CLAUDE_DIR="${STATE_DIR}/claude"
-HOST_DOTCLAUDE="${STATE_DIR}/claude.json"
+HOST_DOTCLAUDE="${STATE_CLAUDE_DIR}/claude.json"
+HOST_DOTCLAUDE_LEGACY="${STATE_DIR}/claude.json"
 
 # Per-project isolation. The container always runs at /workspace, so Claude
 # Code's cwd-slug is always "-workspace" and every host repo would otherwise
@@ -88,8 +93,14 @@ GCLOUD_VOL="${CLAUDE_VERTEX_GCLOUD_VOL:-claude-vertex-gcloud}"
 OKTA_VOL="${CLAUDE_GATEWAY_OKTA_VOL:-claude-gateway-okta}"
 
 mkdir -p "$CFG_DIR" "$STATE_CLAUDE_DIR" "$HOST_PROJECT_DIR"
-# Ensure file exists so Docker bind-mounts it as a file, not a directory.
-[[ -f "$HOST_DOTCLAUDE" ]] || : > "$HOST_DOTCLAUDE"
+# One-time migration: the old sibling $STATE_DIR/claude.json moves inside the
+# .claude dir mount (see HOST_DOTCLAUDE above). Only when the new path is absent,
+# so a real file is never clobbered.
+if [[ -f "$HOST_DOTCLAUDE_LEGACY" && ! -e "$HOST_DOTCLAUDE" ]]; then
+    mv "$HOST_DOTCLAUDE_LEGACY" "$HOST_DOTCLAUDE"
+fi
+# Ensure it exists so the entrypoint's symlink target + prefill have a file.
+[[ -e "$HOST_DOTCLAUDE" ]] || : > "$HOST_DOTCLAUDE"
 
 # Seed an empty env file with placeholders. User edits in host editor; values
 # are passed to the container via --env-file.
@@ -174,22 +185,34 @@ run_in_container() {
     if [[ -t 0 && -t 1 ]]; then
         extra_flags+=(-it)
     fi
-    # Optional: override the baked-in statusline with the host's, if present.
-    local host_statusline="$HOME/.claude/statusline-command.sh"
-    if [[ -f "$host_statusline" ]]; then
-        extra_flags+=(-v "$host_statusline:/opt/claude/statusline.sh:ro")
-    fi
-    # Seeded git identity, mounted ro; the entrypoint's generated ~/.gitconfig
-    # includes it. Replaces the old direct ~/.gitconfig mount (which dragged in
-    # host-only paths + includeIf conditions that never match container paths).
-    if [[ -f "$HOST_GITCONFIG" ]]; then
-        extra_flags+=(-v "$HOST_GITCONFIG:/home/claude/.gitconfig-identity:ro")
-    fi
-    # Settings override: deep-merged onto the seeded settings.json by the
-    # entrypoint. Mounted ro only when it exists -- absent means "no deltas".
+    # Per-run stage directory. Replaces what used to be four fragile single-file
+    # bind mounts (settings override, host MCP creds, statusline, git identity).
+    # Single-file mounts rot on Docker Desktop macOS across host sleep/wake; a
+    # directory mount does not. We read each host source with a normal filesystem
+    # read (no mount), snapshot the ones that exist into a fresh temp dir, and
+    # mount THAT once ro at /opt/claude-stage; the entrypoint consumes them at
+    # boot. mktemp per run avoids races between concurrent launches; the EXIT trap
+    # removes it however the script ends -- normal exit, `set -e` abort, or a
+    # Ctrl-C'd `docker run` (RETURN would miss the last two). run_in_container is
+    # called at most once per invocation, so a single EXIT trap is sufficient.
+    # Only files that exist are staged. STAGE is intentionally NOT `local`: the
+    # EXIT trap runs in the script's global scope, where a function-local would be
+    # out of scope (expanding to '' -> rm -rf '' -> no cleanup).
+    STAGE="$(mktemp -d "${STATE_DIR}/.stage.XXXXXX")"
+    trap 'rm -rf "$STAGE"' EXIT
     if [[ -f "$HOST_SETTINGS" ]]; then
-        extra_flags+=(-v "$HOST_SETTINGS:/home/claude/.claude/settings.override.json:ro")
+        cp "$HOST_SETTINGS" "$STAGE/settings.override.json"
     fi
+    if [[ -f "$HOME/.claude.json" ]]; then
+        cp "$HOME/.claude.json" "$STAGE/host-claude.json"
+    fi
+    if [[ -f "$HOME/.claude/statusline-command.sh" ]]; then
+        cp "$HOME/.claude/statusline-command.sh" "$STAGE/statusline.sh"
+    fi
+    if [[ -f "$HOST_GITCONFIG" ]]; then
+        cp "$HOST_GITCONFIG" "$STAGE/gitconfig-identity"
+    fi
+    extra_flags+=(-v "$STAGE:/opt/claude-stage:ro")
     # GitHub token resolved from the host (gh stores it in the OS keyring by
     # default, so ~/.config/gh alone lacks it). Injected in-memory per run; never
     # written to disk. gh + its credential helper honor GH_TOKEN.
@@ -200,14 +223,8 @@ run_in_container() {
     # NOTE: SSH agent forwarding / host key mounting is intentionally NOT wired
     # here. It is being redesigned as a cross-platform (docker/podman/apple)
     # bring-your-own-provider feature. Until then, push over HTTPS (GH_TOKEN above).
-    # Optional: host ~/.claude.json (the Anthropic-API claude's config) mounted
-    # read-only so the entrypoint can graft its `mcpServers` block into the
-    # container's separate ~/.claude.json. Keeps MCP credentials in one place
-    # on the host without leaking the rest of that file's state. Both flavors
-    # use the same atlassian/context7 MCP servers, so this applies to both.
-    if [[ -f "$HOME/.claude.json" ]]; then
-        extra_flags+=(-v "$HOME/.claude.json:/home/claude/.host-claude.json:ro")
-    fi
+    # (Host ~/.claude.json is staged as host-claude.json above so the entrypoint
+    # can graft its mcpServers env/headers into the container's ~/.claude.json.)
 
     # Flavor-specific mounts.
     if [[ "$FLAVOR" == vertex ]]; then
@@ -265,7 +282,6 @@ run_in_container() {
         -v "$PWD:/workspace" \
         -v "$STATE_CLAUDE_DIR:/home/claude/.claude" \
         -v "$HOST_PROJECT_DIR:/home/claude/.claude/projects/-workspace" \
-        -v "$HOST_DOTCLAUDE:/home/claude/.claude.json" \
         -w /workspace \
         "$IMAGE" "$@"
 }

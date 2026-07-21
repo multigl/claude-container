@@ -36,11 +36,21 @@ fi
 mkdir -p "$DEST"
 [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && mkdir -p "$GCLOUD_DIR"
 # Only chown the writable bind-mounts we actually need to own. A blanket
-# `chown -R /home/claude` would traverse the ro host-mounted ~/.gitconfig-identity
-# and fail with EROFS, killing the container under set -e.
+# `chown -R /home/claude` would traverse ro mounts and fail with EROFS, killing
+# the container under set -e (the ro inputs now arrive under /opt/claude-stage,
+# outside /home/claude, but keep this scoped regardless).
 chown claude:claude /home/claude
 chown -R claude:claude "$DEST"
 [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && chown -R claude:claude "$GCLOUD_DIR"
+
+# Persist ~/.claude.json inside the ~/.claude directory bind mount instead of via
+# a fragile single-file mount (those rot on Docker Desktop macOS across host
+# sleep/wake). The launcher stores it at $DEST/claude.json (inside the mounted
+# state dir); symlink ~/.claude.json to it. In-place writes -- the prefill/graft
+# below and Claude Code's own updates -- follow the symlink into the mount and
+# persist. (An atomic rename-replace in $HOME would clobber the symlink, but the
+# current flavors write in-place; revisit for a future /login OAuth flavor.)
+ln -sfn "$DEST/claude.json" "$DOTCLAUDE"
 # Gateway: the Okta token-cache volume arrives root-owned; hand it to claude so
 # the non-root apiKeyHelper can write its cache. Dir exists only when mounted.
 [[ -d /home/claude/.local/share/litellm ]] && chown -R claude:claude /home/claude/.local/share/litellm
@@ -67,16 +77,16 @@ if [[ -d "$SEED" ]]; then
     fi
 fi
 
-# Merge the user's settings override (mounted ro at
-# ~/.claude/settings.override.json by the launcher when present) onto the seeded
-# settings.json, in place. Re-applied every launch so the override's keys win.
+# Merge the user's settings override (staged at /opt/claude-stage/settings.override.json
+# by the launcher when present) onto the seeded settings.json, in place. Re-applied
+# every launch so the override's keys win.
 # The base settings.json keeps its normal seeded lifecycle (preserved across
 # launches via --ignore-existing; refreshed only by `reseed`), so writes made by
 # /setup-vertex survive. jq `*` deep-merges objects; arrays/scalars are replaced
 # by the override. Removing a key from the override does not auto-revert the base
 # until the next reseed (in-place merge) -- documented behavior.
 SETTINGS="$DEST/settings.json"
-OVERRIDE="$DEST/settings.override.json"
+OVERRIDE="/opt/claude-stage/settings.override.json"
 if [[ -f "$OVERRIDE" && -f "$SETTINGS" ]] && command -v jq >/dev/null 2>&1; then
     tmp="$(mktemp)"
     if gosu claude /opt/claude/merge-settings.sh "$SETTINGS" "$OVERRIDE" > "$tmp"; then
@@ -106,8 +116,8 @@ if [[ -f "$SEED/dotclaude.json" ]] && command -v jq >/dev/null 2>&1; then
     rm -f "$tmp"
 fi
 
-# Graft MCP credentials from host ~/.claude.json (mounted read-only at
-# /home/claude/.host-claude.json by the wrapper) into the container's
+# Graft MCP credentials from the host's ~/.claude.json (staged read-only at
+# /opt/claude-stage/host-claude.json by the wrapper) into the container's
 # ~/.claude.json. Only the `env` (stdio) and `headers` (http) sub-blocks of
 # servers that ALREADY exist in the container config are copied over -- the
 # container keeps its own `command` paths (host paths like /opt/homebrew/bin
@@ -115,7 +125,7 @@ fi
 # doesn't are ignored. Lets you keep MCP credentials in one place on the
 # host instead of duplicating them in the config `env` file. Re-applied every
 # launch so host edits propagate.
-HOST_DOTCLAUDE_RO=/home/claude/.host-claude.json
+HOST_DOTCLAUDE_RO=/opt/claude-stage/host-claude.json
 if [[ -f "$HOST_DOTCLAUDE_RO" ]] && command -v jq >/dev/null 2>&1; then
     if jq -e '.mcpServers' "$HOST_DOTCLAUDE_RO" >/dev/null 2>&1; then
         tmp="$(mktemp)"
@@ -211,21 +221,31 @@ HDR
 fi
 # ----------------------------------------------------------------------------
 
+# --- statusline override ------------------------------------------------------
+# The host statusline is executed on EVERY render, so it can't be a live mount
+# (single-file mounts rot on Docker Desktop macOS). The launcher stages it; copy
+# it over the baked default once at boot into the image path (root-owned, but
+# world-readable/executable so the claude user can run it).
+STAGE_STATUSLINE=/opt/claude-stage/statusline.sh
+if [[ -f "$STAGE_STATUSLINE" ]]; then
+    cp "$STAGE_STATUSLINE" /opt/claude/statusline.sh
+    chmod 0755 /opt/claude/statusline.sh
+fi
+
 # --- git identity + gh credential helper -------------------------------------
-# Write a container-owned ~/.gitconfig, INLINING the launcher-seeded identity
-# once at boot rather than a live `[include]` of the ro mount.
+# Write a container-owned ~/.gitconfig, INLINING the launcher-staged identity
+# once at boot rather than a live `[include]`.
 #
-# Why not [include]: ~/.gitconfig-identity is a single-file ro bind mount from
-# the host over Docker Desktop's macOS file-share layer (/run/host_mark/Users,
-# gRPC-FUSE/virtiofs). That layer goes stale across host sleep/wake, and a
-# stale single-file mount becomes unreadable-as-a-file (I/O error, not ENOENT).
-# git only silently skips an include on ENOENT; on any other read failure it
-# emits `warning: unable to access ...` then `fatal: bad config line N in file
-# ~/.gitconfig` (the include directive) -- breaking EVERY git call, and the
-# git-based statusline with it. A live include re-reads the flaky mount forever;
-# inlining reads it exactly once, here, so staleness can't poison later git ops.
+# Why inline, not [include]: the identity is a host file we must never re-read on
+# a hot path. Historically it was a single-file ro bind mount, which rots on
+# Docker Desktop's macOS file-share across host sleep/wake -- a stale single-file
+# mount becomes unreadable-as-a-file (I/O error, not ENOENT), and git aborts a
+# non-ENOENT include with `fatal: bad config line N in file ~/.gitconfig`,
+# breaking EVERY git call + the git-based statusline. It now arrives in the
+# per-run stage dir instead (a snapshot on a directory mount), but we still read
+# it exactly once, here, so any read failure can't poison later git ops.
 GITCONFIG=/home/claude/.gitconfig
-IDENTITY=/home/claude/.gitconfig-identity
+IDENTITY=/opt/claude-stage/gitconfig-identity
 {
     # Read the seed once. On stale-mount failure / empty / partial read, skip
     # identity (non-fatal) rather than embed garbage; validate it looks like a

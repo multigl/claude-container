@@ -85,8 +85,9 @@ RUN userdel -r node 2>/dev/null || true \
     && useradd -m -u 1000 -s /bin/bash claude \
     && chown -R claude:claude /opt/claude-seed
 
-# Default statusline at a flavor-neutral path. Wrapper script mounts a host
-# override onto this same path if ~/.claude/statusline-command.sh exists.
+# Default statusline at a flavor-neutral path. The entrypoint copies a host
+# override over this at boot when ~/.claude/statusline-command.sh was staged
+# (see docker-entrypoint.sh "statusline override").
 COPY bin/statusline.sh /opt/claude/statusline.sh
 RUN chmod +x /opt/claude/statusline.sh
 
