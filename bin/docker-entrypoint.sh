@@ -212,18 +212,35 @@ fi
 # ----------------------------------------------------------------------------
 
 # --- git identity + gh credential helper -------------------------------------
-# Write a container-owned ~/.gitconfig that INCLUDES the launcher-seeded, ro
-# identity file (mounted at ~/.gitconfig-identity). git ignores the include if the
-# path is absent, so this is safe when no identity was seeded.
+# Write a container-owned ~/.gitconfig, INLINING the launcher-seeded identity
+# once at boot rather than a live `[include]` of the ro mount.
+#
+# Why not [include]: ~/.gitconfig-identity is a single-file ro bind mount from
+# the host over Docker Desktop's macOS file-share layer (/run/host_mark/Users,
+# gRPC-FUSE/virtiofs). That layer goes stale across host sleep/wake, and a
+# stale single-file mount becomes unreadable-as-a-file (I/O error, not ENOENT).
+# git only silently skips an include on ENOENT; on any other read failure it
+# emits `warning: unable to access ...` then `fatal: bad config line N in file
+# ~/.gitconfig` (the include directive) -- breaking EVERY git call, and the
+# git-based statusline with it. A live include re-reads the flaky mount forever;
+# inlining reads it exactly once, here, so staleness can't poison later git ops.
 GITCONFIG=/home/claude/.gitconfig
-cat > "$GITCONFIG" <<'EOF'
-[include]
-    path = /home/claude/.gitconfig-identity
+IDENTITY=/home/claude/.gitconfig-identity
+{
+    # Read the seed once. On stale-mount failure / empty / partial read, skip
+    # identity (non-fatal) rather than embed garbage; validate it looks like a
+    # [user] block before trusting it. The seed is already a [user] stanza.
+    _identity="$(cat "$IDENTITY" 2>/dev/null || true)"
+    if [[ "$_identity" == *"[user]"* ]]; then
+        printf '%s\n\n' "$_identity"
+    fi
+    cat <<'EOF'
 [safe]
     directory = *
 [init]
     defaultBranch = main
 EOF
+} > "$GITCONFIG"
 chown claude:claude "$GITCONFIG"
 
 # Register gh as the HTTPS credential helper when a token was injected (GH_TOKEN

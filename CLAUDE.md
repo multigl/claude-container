@@ -151,7 +151,13 @@ key you migrate from.
   `~/.config/vida-claude-container/<flavor>/gitconfig` (prefilled from host
   `git config`), mounts it ro at
   `~/.gitconfig-identity`, and the entrypoint generates a writable `~/.gitconfig`
-  that includes it. The host `~/.gitconfig` is not mounted directly.
+  that **inlines** it (reads the seed once at boot, not a live `[include]`). The
+  host `~/.gitconfig` is not mounted directly. Inlining is deliberate: the ro
+  identity mount rides Docker Desktop's macOS file-share layer, which goes stale
+  across host sleep/wake; a live `[include]` of a stale single-file mount fails
+  non-ENOENT and git aborts with `bad config line N` — breaking every git call
+  and the git-based statusline. Reading once at boot confines that risk (and a
+  failed read is non-fatal — identity is skipped, git still works).
 - **`gh` auth is a resolved token, not a mount.** The launcher injects
   `GH_TOKEN=$(gh auth token)` from the host (keyring-safe). The entrypoint runs
   `gh auth setup-git` for HTTPS push.
