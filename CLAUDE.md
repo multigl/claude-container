@@ -18,7 +18,7 @@ keeps its own state under `~/.local/state/vida-claude-container/<flavor>/claude/
 
 ## Architecture
 
-Multi-stage `Dockerfile`:
+Multi-stage `Containerfile`:
 
 ```
 base ─┬─► vertex    (adds google-cloud-cli + Vertex ENV)
@@ -33,7 +33,7 @@ it was invoked as (override with `CLAUDE_FLAVOR=...`).
 
 ## Key files
 
-- `Dockerfile` — multi-stage build (`base`, `vertex`, `gateway`).
+- `Containerfile` — multi-stage build (`base`, `vertex`, `gateway`).
 - `bin/claude-launcher.sh` — host wrapper; assembles the `docker run` (mounts, env,
   auth volumes) and dispatches subcommands (`auth`, `shell`, `reseed`, `--`).
 - `bin/docker-entrypoint.sh` — runs as root to chown bind mounts + remap `claude` to
@@ -164,7 +164,7 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   `~/.local/state/vida-claude-container/<flavor>/claude` bind mount, the host
   `claude.json`/config `env` files, or a named docker volume (gcloud ADC, Okta cache).
 - **claude-code is version-pinned; auto-update is OFF** (`DISABLE_AUTOUPDATER=1` in
-  the `Dockerfile` base). In-container self-update can't work — global npm install
+  the `Containerfile` base). In-container self-update can't work — global npm install
   is root-owned but the process is non-root (EACCES), and `--rm` would discard it
   anyway. **Move the version forward with `just update`** (resolves the latest npm
   version and rebuilds pinned to it via the `CLAUDE_CODE_VERSION` build arg; set
@@ -199,7 +199,7 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   entrypoint, not baked as `ENV`, to avoid the `SecretsUsedInArgOrEnv` warning on
   the `*_CREDENTIALS` name pattern.
 - **Plugins.** `superpowers` and `caveman` are pre-seeded and enabled; both are
-  pinned to specific SHAs in the `Dockerfile` base stage.
+  pinned to specific SHAs in the `Containerfile` base stage.
 - **Memory is per-project, index is derived.** Each host repo gets its own
   `projects/<key>/memory` + transcripts (keyed on `$PWD` slug + a `cksum` suffix);
   a per-flavor global tier lives at `~/.claude/memory-global/` and is surfaced via

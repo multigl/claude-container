@@ -11,11 +11,11 @@ default:
 
 # Build the {{flavor}} image (FLAVOR=vertex|gateway)
 build:
-    docker build --target {{flavor}} -t {{image}} {{here}}
+    docker build -f {{here}}/Containerfile --target {{flavor}} -t {{image}} {{here}}
 
 # Rebuild the {{flavor}} image without cache
 rebuild:
-    docker build --no-cache --target {{flavor}} -t {{image}} {{here}}
+    docker build -f {{here}}/Containerfile --no-cache --target {{flavor}} -t {{image}} {{here}}
 
 # Update claude-code: rebuild {{flavor}} pinned to the latest published version.
 # The container's claude-code is deliberately non-self-updating (pinned + ephemeral
@@ -24,33 +24,33 @@ rebuild:
 # Override the target version with the CLAUDE_CODE_VERSION env var.
 update:
     ver="${CLAUDE_CODE_VERSION:-$(npm view @anthropic-ai/claude-code version)}"; \
-    docker build --target {{flavor}} --build-arg CLAUDE_CODE_VERSION="$ver" \
+    docker build -f {{here}}/Containerfile --target {{flavor}} --build-arg CLAUDE_CODE_VERSION="$ver" \
         -t {{image}} {{here}}; \
     echo ">> built {{image}} with claude-code $ver"
 
 # Build the vertex image
 build-vertex:
-    docker build --target vertex -t claude-vertex:latest {{here}}
+    docker build -f {{here}}/Containerfile --target vertex -t claude-vertex:latest {{here}}
 
 # Build the gateway image
 build-gateway:
-    docker build --target gateway -t claude-gateway:latest {{here}}
+    docker build -f {{here}}/Containerfile --target gateway -t claude-gateway:latest {{here}}
 
 # Build both images (shared base layer is cached, so the second is cheap)
 build-all: build-vertex build-gateway
 
 # Rebuild the vertex image without cache
 rebuild-vertex:
-    docker build --no-cache --target vertex -t claude-vertex:latest {{here}}
+    docker build -f {{here}}/Containerfile --no-cache --target vertex -t claude-vertex:latest {{here}}
 
 # Rebuild the gateway image without cache
 rebuild-gateway:
-    docker build --no-cache --target gateway -t claude-gateway:latest {{here}}
+    docker build -f {{here}}/Containerfile --no-cache --target gateway -t claude-gateway:latest {{here}}
 
 # Rebuild both images from scratch (base built no-cache once, then reused)
 rebuild-all:
-    docker build --no-cache --target vertex -t claude-vertex:latest {{here}}
-    docker build --target gateway -t claude-gateway:latest {{here}}
+    docker build -f {{here}}/Containerfile --no-cache --target vertex -t claude-vertex:latest {{here}}
+    docker build -f {{here}}/Containerfile --target gateway -t claude-gateway:latest {{here}}
 
 # One-time login for {{flavor}} (gcloud ADC, or Okta device login) -> docker volume
 auth:

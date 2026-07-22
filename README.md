@@ -31,7 +31,7 @@ claude-gateway    # routed through your LLM gateway
 
 ## How the two flavors share one build
 
-The `Dockerfile` is multi-stage:
+The `Containerfile` is multi-stage:
 
 ```
 base ──┬─► vertex    (adds gcloud CLI + Vertex ENV)
