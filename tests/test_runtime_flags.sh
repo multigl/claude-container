@@ -48,4 +48,15 @@ bp="$(rt_build_cmd gateway claude-gateway:latest /ctx)"
 assert_contains "$bp" "podman build" "podman: build uses podman"
 assert_contains "$bp" "-f /ctx/Containerfile" "podman: build -f Containerfile"
 
+# apple driver --------------------------------------------------------------
+load_driver apple
+assert_eq "container" "$(rt_bin)" "apple rt_bin is container"
+fa="$(rt_run_flags)"
+assert_not_contains "$fa" "userns"            "apple: no userns flag"
+assert_not_contains "$fa" "_CLAUDE_UID_REMAP" "apple: remap no-op (VM file-share translates)"
+ba="$(rt_build_cmd vertex claude-vertex:latest /ctx)"
+assert_contains "$ba" "container build" "apple: build uses container"
+assert_contains "$ba" "-f /ctx/Containerfile" "apple: build -f Containerfile"
+assert_contains "$ba" "--target vertex" "apple: build --target"
+
 finish
