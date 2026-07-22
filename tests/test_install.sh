@@ -41,4 +41,13 @@ assert_contains "$out" "runtime: docker"          "skip-apple-gate proceeds on m
 out="$(plan OSTYPE_STUB=Darwin ARCH_STUB=x86_64 HAVE_APPLE=)"
 assert_not_contains "$out" "APPLE GATE"           "intel mac ineligible -> no gate"
 
+# --- dry-run creates no side effects (BIN_DIR must not be mkdir'd) ---
+drh="$(mktemp -d)"; drbin="$(mktemp -d)"
+for rt in docker podman container; do printf '#!/usr/bin/env bash\ncase "$1 $2" in "info "*|"info"|"system status") exit 0;; esac\nexit 0\n' > "$drbin/$rt"; chmod +x "$drbin/$rt"; done
+printf '#!/usr/bin/env bash\n[[ "$1" == "-m" ]] && { echo x86_64; exit 0; }\necho Linux\n' > "$drbin/uname"; chmod +x "$drbin/uname"
+env HOME="$drh" PATH="$drbin:$PATH" bash "$INSTALL" --local --dry-run >/dev/null 2>&1
+assert_eq "" "$(ls -A "$drh/.local/bin" 2>/dev/null || true)" "dry-run does not create BIN_DIR"
+assert_eq "absent" "$([[ -d "$drh/.local/bin" ]] && echo present || echo absent)" "dry-run does not mkdir BIN_DIR"
+rm -rf "$drh" "$drbin"
+
 finish

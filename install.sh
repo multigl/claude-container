@@ -52,14 +52,9 @@ if apple_eligible && ! command -v container >/dev/null 2>&1 && [[ "$NO_APPLE_GAT
     exit 3
 fi
 
-RT="$(detect_runtime)"
-if [[ "$RT" == none ]]; then
-    say "No usable container runtime. Install docker or podman (or Apple 'container' on macOS 26+)."
-    exit 1
-fi
-say "runtime: $RT"
-
 # --- fetch (remote mode) -----------------------------------------------------
+# Clone BEFORE runtime detection so detect_runtime can use the cloned tree's
+# dispatcher (bin/container-runtime.sh) — which is what resolves Apple 'container'.
 if [[ "$LOCAL" != 1 ]]; then
     if [[ "$DRYRUN" == 1 ]]; then plan "fetch: $REPO@$REF -> $PREFIX";
     else
@@ -70,6 +65,13 @@ if [[ "$LOCAL" != 1 ]]; then
     SRC="$PREFIX"
 fi
 
+RT="$(detect_runtime)"
+if [[ "$RT" == none ]]; then
+    say "No usable container runtime. Install docker or podman (or Apple 'container' on macOS 26+)."
+    exit 1
+fi
+say "runtime: $RT"
+
 # --- build -------------------------------------------------------------------
 for f in "${FLAVORS[@]}"; do
     img="claude-$f:latest"
@@ -79,7 +81,7 @@ for f in "${FLAVORS[@]}"; do
 done
 
 # --- symlink wrappers --------------------------------------------------------
-mkdir -p "$BIN_DIR" 2>/dev/null || true
+[[ "$DRYRUN" == 1 ]] || mkdir -p "$BIN_DIR" 2>/dev/null || true
 for f in "${FLAVORS[@]}"; do
     if [[ "$DRYRUN" == 1 ]]; then plan "symlink: claude-$f -> $SRC/bin/claude-launcher.sh"; continue; fi
     ln -sf "$SRC/bin/claude-launcher.sh" "$BIN_DIR/claude-$f"
