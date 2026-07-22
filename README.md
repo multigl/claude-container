@@ -31,7 +31,7 @@ claude-gateway    # routed through your LLM gateway
 
 ## How the two flavors share one build
 
-The `Dockerfile` is multi-stage:
+The `Containerfile` is multi-stage:
 
 ```
 base ──┬─► vertex    (adds gcloud CLI + Vertex ENV)
@@ -47,9 +47,40 @@ The host wrapper is a single script, `bin/claude-launcher.sh`, symlinked to both
 `claude-vertex` and `claude-gateway`; it picks its flavor from the name it was
 invoked as (override with `CLAUDE_FLAVOR=...`).
 
+## Install
+
+One-liner (detects OS/arch + runtime, clones, builds, symlinks
+`claude-<flavor>` into `~/.local/bin`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash
+```
+
+Useful flags: `--all` (both flavors), `--flavor vertex|gateway`,
+`--runtime docker|podman|apple`, `--prefix` / `--bin-dir`, `--ref`, `--dry-run`.
+
+### Container runtime
+
+The image runs under docker, podman, or Apple's `container`. The installer and the
+`claude-<flavor>` wrapper auto-detect one (priority **apple > docker > podman**,
+"available" = installed **and** functional). Force one with
+`CLAUDE_RUNTIME=docker|podman|apple`; inspect the choice with
+`claude-<flavor> --print-runtime`.
+
+| OS    | docker          | podman          | apple `container`  |
+|-------|-----------------|-----------------|--------------------|
+| Linux | ✅ if installed | ✅ if installed | —                  |
+| macOS | ✅ if installed | ✅ if installed | ✅ if installed    |
+
+Apple `container` needs Apple Silicon + macOS 26+. On such a host without it
+installed, the installer **stops** and asks you to install it and re-run — skip that
+gate with `--no-apple-gate` (or `CLAUDE_SKIP_APPLE_GATE=1`) to use docker/podman
+instead; ineligible hosts fall through automatically.
+
 ## Prerequisites
 
-1. **Docker Desktop** (or any Docker engine) running.
+1. **A container runtime** running — docker, podman, or Apple `container`
+   (auto-detected; see "Install" above).
 2. **[`just`](https://github.com/casey/just)** — `brew install just`.
 3. **`~/.local/bin` on `PATH`** (or set `BIN_DIR=/usr/local/bin` when installing).
 4. Flavor-specific:
@@ -104,16 +135,18 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 | `claude-<flavor> -- <args>` | Pass flags through to `claude`                           |
 | `claude-<flavor> migrate-memory` | One-time: move the legacy shared memory bucket to this repo's per-project key (run from the repo that owns that history) |
 | `claude-<flavor> rebuild-memory-index` | Regenerate the derived `MEMORY.md` index for this repo + the global tier (normally automatic each launch; manual repair) |
+| `claude-<flavor> migrate-creds` | One-time: copy an old named cred volume into the new `$STATE_DIR/creds/…` bind dir (docker/podman only) |
+| `claude-<flavor> --print-runtime` | Print the resolved container runtime + per-runtime availability |
 | `just build`             | Build the `FLAVOR` image (`--target`)                       |
 | `just build-vertex` / `build-gateway` / `build-all` | Build a specific flavor / both |
 | `just rebuild-vertex` / `rebuild-gateway` / `rebuild-all` | No-cache rebuild of a flavor / both |
 | `just install` / `install-all` | Symlink one / both flavor commands                   |
 | `just auth`              | One-time login — vertex: gcloud ADC; gateway: Okta device login |
-| `just reset-auth`        | Wipe the flavor's credential volume; forces re-auth         |
+| `just reset-auth`        | Wipe the flavor's cred dir (`$STATE_DIR/creds/…`); forces re-auth |
 | `just reseed`            | Overwrite the host config's seeded files (settings + plugins) from the image; preserves history |
 | `just test`              | Run the gateway Okta helper `pytest` suite                  |
 | `FLAVOR=gateway just doctor` | Self-check for the gateway flavor                       |
-| `just doctor`            | Self-check (vertex): docker, image, auth volume, ADC, PATH  |
+| `just doctor`            | Self-check (vertex): runtime, image, cred dir, ADC, PATH    |
 | `just`                   | List recipes (default)                                      |
 
 ## How it works
@@ -126,13 +159,13 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 │                                                              │
 │  $ claude-vertex   ──► container claude-vertex:latest        │
 │        env: CLAUDE_CODE_USE_VERTEX=1 + Vertex pins           │
-│        creds: gcloud ADC in docker volume                   │
+│        creds: gcloud ADC in $STATE_DIR/creds/gcloud         │
 │        ───────► us-east5-aiplatform.googleapis.com           │
 │                                                              │
 │  $ claude-gateway  ──► container claude-gateway:latest       │
 │        env: ANTHROPIC_BASE_URL=<gateway>                     │
 │        auth: baked apiKeyHelper mints an Okta id_token;      │
-│              refresh_token cached in a docker volume        │
+│              refresh_token in $STATE_DIR/creds/okta         │
 │        ───────► <gateway>/v1/messages                        │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -190,8 +223,11 @@ Wrapper files live in an XDG split under the `vida-claude-container` namespace:
 
     $XDG_STATE_HOME/vida-claude-container/<flavor>/    # machine-managed; disposable
     ├── claude/                 # seeded config -> container ~/.claude
+    │   ├── claude.json         # trust flags, mcpServers, grafted MCP creds (container ~/.claude.json, symlinked)
     │   └── memory-global/      # per-flavor global memory tier (cross-project facts)
-    ├── claude.json             # trust flags, mcpServers, grafted MCP creds
+    ├── creds/                  # auth caches (bind dirs, not named volumes)
+    │   ├── gcloud/             # vertex: gcloud ADC       -> container ~/.config/gcloud
+    │   └── okta/               # gateway: Okta token cache -> container ~/.local/share/litellm
     └── projects/<key>/         # per-repo memory + /resume history, keyed on host $PWD
                                  # (see `claude-<flavor> migrate-memory` / `rebuild-memory-index`)
 
@@ -222,7 +258,8 @@ migration; move them by hand once (per flavor):
     mv ~/.claude-$flavor.mounts    "$cfg/mounts"     2>/dev/null || true
     mv ~/.claude-$flavor.gitconfig "$cfg/gitconfig"  2>/dev/null || true
     mv ~/.claude-$flavor          "$state/claude"    2>/dev/null || true
-    mv ~/.claude-$flavor.json     "$state/claude.json" 2>/dev/null || true
+    mkdir -p "$state/claude"
+    mv ~/.claude-$flavor.json     "$state/claude/claude.json" 2>/dev/null || true
 
 ## Gateway configuration
 
@@ -233,13 +270,13 @@ The gateway flavor is a generic Anthropic-format client pointed at your gateway.
 | `ANTHROPIC_BASE_URL`             | `https://your-gateway.example.com`   | Claude **appends `/v1/messages`** — set the base *without* it. Bake via `--build-arg GATEWAY_BASE_URL=…` or override at runtime. |
 | `ENABLE_TOOL_SEARCH`             | `true`                               | Re-enables MCP tool search, which Claude disables by default against a non-first-party base URL. |
 | `ANTHROPIC_MODEL` + `ANTHROPIC_DEFAULT_*_MODEL` | placeholders (`claude-opus-4-6`, …) | Set to the `model_name` strings your gateway exposes. |
-| `apiKeyHelper`                   | `/opt/claude/api-key-helper`         | Baked Okta helper (`gateway/okta_token_helper.py`, python3-only). Mints/refreshes an Okta **id_token** (JWT); token cache lives in the `claude-gateway-okta` docker volume. |
+| `apiKeyHelper`                   | `/opt/claude/api-key-helper`         | Baked Okta helper (`gateway/okta_token_helper.py`, python3-only). Mints/refreshes an Okta **id_token** (JWT); token cache lives in `$STATE_DIR/creds/okta` (bind dir → container `~/.local/share/litellm`). |
 | `OKTA_ISSUER`                    | `https://vida.okta.com`              | Okta **Org** authorization server (no `/oauth2/<id>`). Set in `~/.config/vida-claude-container/gateway/env`. |
 | `OKTA_CLIENT_ID`                 | —                                    | The Okta **Native app** `client_id`; must equal LiteLLM's `JWT_AUDIENCE`. Set in `~/.config/vida-claude-container/gateway/env`. |
 
 **Auth (one-time device login).** `FLAVOR=gateway just auth` runs the baked helper
 with `--login-only`: it prints an Okta verification URL (approve it in your host
-browser), then stores a `refresh_token` in the `claude-gateway-okta` volume.
+browser), then stores a `refresh_token` in `$STATE_DIR/creds/okta`.
 Afterwards the helper serves a cached `id_token` and silently refreshes it (re-running
 on HTTP 401); Claude sends the `id_token` as the bearer. Refresh tokens expire after
 ~7 days idle — re-login with `FLAVOR=gateway just reset-auth` then `just auth`.
@@ -288,7 +325,7 @@ Pinning also restores the **1M context window**: append `[1m]` to a model ID
 Override per-invocation by exporting env (the wrapper passes it through), or edit
 the env file. **Existing installs:** the env file is seeded only when absent and
 `reseed` does not rewrite it — hand-add the rows above to your live env file, then
-kill and reopen the session (env is read once at `docker run`).
+kill and reopen the session (env is read once at container start).
 
 ## Verifying which provider you're on
 
@@ -320,8 +357,9 @@ prints the `id_token` to stdout and diagnostics to stderr.
 
 **`just doctor` reports problems** — follow its hints (per flavor).
 
-**Permission errors writing to a mounted dir** — the container remaps to your
-host UID/GID on Linux; macOS Docker Desktop maps implicitly.
+**Permission errors writing to a mounted dir** — under docker on Linux the
+container remaps to your host UID/GID; podman uses `--userns=keep-id`; macOS
+(Docker Desktop / Apple `container`) maps implicitly via its VM file share.
 
 ## Uninstall
 
@@ -329,7 +367,7 @@ host UID/GID on Linux; macOS Docker Desktop maps implicitly.
 just uninstall                  # remove both wrapper symlinks
 FLAVOR=gateway just clean       # remove gateway image
 just clean                      # remove vertex image
-just reset-auth                 # wipe gcloud creds volume
+just reset-auth                 # wipe the flavor's cred dir ($STATE_DIR/creds/…)
 rm -rf ~/.config/vida-claude-container ~/.local/state/vida-claude-container
 ```
 

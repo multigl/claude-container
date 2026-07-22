@@ -18,7 +18,7 @@ keeps its own state under `~/.local/state/vida-claude-container/<flavor>/claude/
 
 ## Architecture
 
-Multi-stage `Dockerfile`:
+Multi-stage `Containerfile`:
 
 ```
 base ─┬─► vertex    (adds google-cloud-cli + Vertex ENV)
@@ -31,16 +31,75 @@ seed, the non-root `claude` user, the entrypoint). Build a flavor with
 symlinked to `claude-vertex` / `claude-gateway` and picks its flavor from the name
 it was invoked as (override with `CLAUDE_FLAVOR=...`).
 
+## Container runtime
+
+The image runs under one of three container runtimes, chosen by a dispatcher —
+`bin/container-runtime.sh` — that sources one driver from
+`bin/runtimes/{docker,podman,apple}.sh`. Both `bin/claude-launcher.sh` and the
+`just` build recipes route container ops through it (`container-runtime.sh
+--resolve` / `build …`), so there is one detection path.
+
+- **Priority: apple > docker > podman.** "Available" = installed **and** functional:
+  `docker info` / `podman info` succeed; apple = eligible host (Apple Silicon,
+  macOS 26+) **and** `container system status` succeeds. Platform gating: Linux
+  considers {docker, podman}; macOS considers {apple, docker, podman}.
+- **Override:** `CLAUDE_RUNTIME=docker|podman|apple` (errors if that runtime isn't
+  available). Debug: `claude-<flavor> --print-runtime` prints the resolved runtime +
+  per-runtime availability; `--print-paths` now includes a `RUNTIME=` line.
+- **docker** (rootful Linux / Docker Desktop): unchanged — HOST_UID/HOST_GID remap
+  in the entrypoint.
+- **podman** (rootless Linux): passes `--userns=keep-id:uid=1000,gid=1000` to map
+  the host user onto the image's `claude` (uid 1000), plus an internal
+  `_CLAUDE_UID_REMAP=skip` so the entrypoint skips its usermod/chown remap. On
+  SELinux-enforcing hosts it adds `--security-opt label=disable` (chosen over
+  per-mount `:z` relabeling, which would relabel shared host dirs like `~/.claude`).
+  `_CLAUDE_UID_REMAP` is internal — per-run `-e` only, never in the env file.
+- **apple `container`** (macOS 26+ on Apple Silicon only; v1.1.0, stable): its VM
+  bind-mount file share **passes host UIDs through** (unlike Docker Desktop's
+  uid-agnostic gRPC-FUSE), so apple uses the **same `HOST_UID` remap path as
+  docker** — no userns flag, no `_CLAUDE_UID_REMAP=skip`. The usermod remap is
+  load-bearing here: with `claude` remapped to the host uid, in-container ownership
+  matches what the share presents and the seed rsync never attempts chown/chgrp;
+  skipping it (claude left at 1000) makes rsync try to fix the mismatch and abort
+  (EPERM). Separately, the share **rejects the `chown`/`utimensat` syscalls on the
+  mount regardless of uid**, so the entrypoint's explicit mount chowns are
+  best-effort (`… 2>/dev/null || true`) and the seed rsync drops time preservation
+  (`--no-times --omit-dir-times`).
+
+`just doctor` has a `== runtime ==` section (resolved runtime + availability).
+`just build`/`build-vertex`/`build-gateway`/`update` route through the dispatcher;
+`rebuild-*` remain docker-specific (the dispatcher build has no `--no-cache` flag
+yet — a known minor gap).
+
+### Installer (`install.sh`)
+
+`curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash`.
+Detects OS/arch, resolves a runtime, applies a macOS **apple gate** (on an
+Apple-Silicon macOS 26+ host without Apple `container` installed it stops and tells
+you to install it + re-run; skip with `--no-apple-gate` or
+`CLAUDE_SKIP_APPLE_GATE=1`; ineligible hosts fall through to docker/podman), clones
+the repo, builds the image(s) via the dispatcher, and symlinks `claude-<flavor>`
+into `~/.local/bin`. Flags: `--local` (skip clone; used by `just install`), `--all`,
+`--flavor`, `--runtime`, `--no-apple-gate`, `--prefix`, `--bin-dir`, `--ref`,
+`--dry-run`. `just install` = `install.sh --local --flavor <flavor>`;
+`just install-all` = `install.sh --local --all`.
+
 ## Key files
 
-- `Dockerfile` — multi-stage build (`base`, `vertex`, `gateway`).
-- `bin/claude-launcher.sh` — host wrapper; assembles the `docker run` (mounts, env,
-  auth volumes) and dispatches subcommands (`auth`, `shell`, `reseed`, `--`).
+- `Containerfile` — multi-stage build (`base`, `vertex`, `gateway`).
+- `bin/container-runtime.sh` — runtime dispatcher; detects a runtime (apple >
+  docker > podman) + sources one driver from `bin/runtimes/`. See "Container runtime".
+- `bin/runtimes/{docker,podman,apple}.sh` — per-runtime drivers (run/build flags).
+- `install.sh` — `curl … | bash` installer (also backs `just install`); see below.
+- `bin/claude-launcher.sh` — host wrapper; resolves the runtime, assembles the
+  `<runtime> run` (mounts, env, cred bind dirs) and dispatches subcommands (`auth`,
+  `shell`, `reseed`, `migrate-creds`, `--`).
 - `bin/docker-entrypoint.sh` — runs as root to chown bind mounts + remap `claude` to
   the host UID/GID, seeds `~/.claude`, grafts MCP config/creds, then drops to
   `claude` via `gosu`.
 - `bin/statusline.sh` — default statusline (baked at `/opt/claude/statusline.sh`;
-  a host `~/.claude/statusline-command.sh` overrides it via a launcher mount).
+  a host `~/.claude/statusline-command.sh` overrides it via the per-run stage dir,
+  copied over the default at boot — see "Stage directory").
 - `justfile` — build / install / auth / run / doctor / **update** recipes.
 - `seed-common/` — flavor-neutral seed payload (incl. `dotclaude.json` with the
   atlassian + context7 `mcpServers`); overlaid per flavor by `seed-{vertex,gateway}/`.
@@ -74,7 +133,30 @@ On first launch `docker-entrypoint.sh` copies `/opt/claude-seed` → `~/.claude`
 edits survive. `CLAUDE_RESEED=1` (via `just reseed`) instead overwrites the seeded
 files (settings + plugins) while preserving history/projects. The `mcpServers`
 block is force-synced from the seed each launch, then `env`/`headers` creds are
-grafted read-only from the host `~/.claude.json` (mounted at `.host-claude.json`).
+grafted from the host `~/.claude.json` (staged read-only at
+`/opt/claude-stage/host-claude.json`; see "Stage directory" below).
+
+The container's own `~/.claude.json` (trust/onboarding flags, `mcpServers`, grafted
+creds) is stored at `…/<flavor>/claude/claude.json` — inside the `~/.claude` dir
+mount — and the entrypoint symlinks `~/.claude.json` to it. It is **not** a
+credential store in these flavors (vertex uses gcloud ADC, gateway the Okta
+apiKeyHelper); a future `/login` OAuth flavor would change that. Old installs with
+a sibling `…/<flavor>/claude.json` are auto-migrated into `claude/` on next launch.
+
+### Stage directory (no single-file bind mounts)
+
+Single-file bind mounts rot on Docker Desktop macOS (virtio-fs/gRPC-FUSE goes
+stale across host sleep/wake), so the launcher never mounts individual files. Each
+launch it assembles a per-run temp dir (`mktemp -d "$STATE_DIR/.stage.XXXXXX"`,
+removed on exit) by plain host-side `cp` of whichever inputs exist —
+`settings.override.json`, the host `~/.claude.json` (as `host-claude.json`), the
+host `~/.claude/statusline-command.sh` (as `statusline.sh`), and the git identity
+(as `gitconfig-identity`) — and mounts that dir **once** ro at `/opt/claude-stage`.
+The entrypoint consumes them at boot: merges the override, grafts MCP creds,
+inlines the git identity once, and copies the statusline over the baked default at
+`/opt/claude/statusline.sh` (it executes on every render, so it can't stay a
+mount). Host reads happen on the normal filesystem, so mount staleness can't reach
+them.
 
 The `env` file is seeded per-flavor **only when absent** (not by `reseed`), with
 real values, not blanks. The **vertex** flavor seeds model + region pins
@@ -85,14 +167,15 @@ on the `us` multi-region, haiku on `us-east5`. Pinning is load-bearing — unpin
 the Vertex small/fast model defaults to `claude-sonnet-4-5` (429s if unprovisioned;
 powers background titles + web-search summarization) and the 1M window is lost
 (`[1m]` suffix; Sonnet 5 is always 1M). Existing installs hand-add these to the
-live env file — `reseed` won't rewrite it. Env is read once at `docker run`, so an
-edit needs a session kill+reopen.
+live env file — `reseed` won't rewrite it. Env is read once at container start, so
+an edit needs a session kill+reopen.
 
 Host-side wrapper files live in an XDG split (namespace `vida-claude-container`):
 config the user hand-edits under `$XDG_CONFIG_HOME/vida-claude-container/<flavor>/`
 (`env`, `mounts`, `gitconfig`, `settings.override.json`), and machine-managed state
 under `$XDG_STATE_HOME/vida-claude-container/<flavor>/` (`claude/` → the container's
-`~/.claude`, and `claude.json`). Defaults fall back to `~/.config` and
+`~/.claude`, which now also holds `claude/claude.json` → the container's
+symlinked `~/.claude.json`). Defaults fall back to `~/.config` and
 `~/.local/state` when the XDG vars are unset. Only config files have escape-hatch
 env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_GITCONFIG`,
 `CLAUDE_SETTINGS`); state paths follow `XDG_STATE_HOME` only.
@@ -134,12 +217,19 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
 - **Non-root.** Runs as `claude` (uid 1000) — Claude Code refuses
   `bypassPermissions` as root. The entrypoint remaps this user to the host's
   UID/GID so writes into mounts land with host ownership.
-- **Ephemeral (`docker run --rm`).** Nothing written to the container filesystem
+- **Ephemeral (`<runtime> run --rm`).** Nothing written to the container filesystem
   survives. Persistent state must live in the
   `~/.local/state/vida-claude-container/<flavor>/claude` bind mount, the host
-  `claude.json`/config `env` files, or a named docker volume (gcloud ADC, Okta cache).
+  `claude.json`/config `env` files, or the cred bind dirs (below).
+- **Credentials are host bind dirs, not named volumes.** Auth caches live under
+  XDG state: `$STATE_DIR/creds/gcloud` → `~/.config/gcloud` (vertex ADC) and
+  `$STATE_DIR/creds/okta` → `~/.local/share/litellm` (gateway Okta cache). No more
+  `docker volume` (works across all three runtimes). `just reset-auth` removes the
+  cred dir. Old installs that still have the pre-fix named volume can migrate it in
+  once with `claude-<flavor> migrate-creds` (copies the old volume into the new dir
+  via the resolved runtime; docker/podman only).
 - **claude-code is version-pinned; auto-update is OFF** (`DISABLE_AUTOUPDATER=1` in
-  the `Dockerfile` base). In-container self-update can't work — global npm install
+  the `Containerfile` base). In-container self-update can't work — global npm install
   is root-owned but the process is non-root (EACCES), and `--rm` would discard it
   anyway. **Move the version forward with `just update`** (resolves the latest npm
   version and rebuilds pinned to it via the `CLAUDE_CODE_VERSION` build arg; set
@@ -153,15 +243,15 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   bind mount is itself the access boundary.
 - **Git identity is seeded, not inherited.** The launcher writes
   `~/.config/vida-claude-container/<flavor>/gitconfig` (prefilled from host
-  `git config`), mounts it ro at
-  `~/.gitconfig-identity`, and the entrypoint generates a writable `~/.gitconfig`
-  that **inlines** it (reads the seed once at boot, not a live `[include]`). The
-  host `~/.gitconfig` is not mounted directly. Inlining is deliberate: the ro
-  identity mount rides Docker Desktop's macOS file-share layer, which goes stale
-  across host sleep/wake; a live `[include]` of a stale single-file mount fails
-  non-ENOENT and git aborts with `bad config line N` — breaking every git call
-  and the git-based statusline. Reading once at boot confines that risk (and a
-  failed read is non-fatal — identity is skipped, git still works).
+  `git config`), stages it as `gitconfig-identity` (see "Stage directory"), and the
+  entrypoint generates a writable `~/.gitconfig` that **inlines** it (reads the
+  staged file once at boot, not a live `[include]`). The host `~/.gitconfig` is not
+  mounted directly. Inlining is deliberate: a live `[include]` of a host file that
+  becomes unreadable (a stale single-file mount, non-ENOENT) makes git abort with
+  `bad config line N` — breaking every git call and the git-based statusline.
+  Reading once at boot confines that risk (and a failed read is non-fatal —
+  identity is skipped, git still works). This is also *why* single-file mounts were
+  eliminated in favor of the stage dir.
 - **`gh` auth is a resolved token, not a mount.** The launcher injects
   `GH_TOKEN=$(gh auth token)` from the host (keyring-safe). The entrypoint runs
   `gh auth setup-git` for HTTPS push.
@@ -174,7 +264,7 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   entrypoint, not baked as `ENV`, to avoid the `SecretsUsedInArgOrEnv` warning on
   the `*_CREDENTIALS` name pattern.
 - **Plugins.** `superpowers` and `caveman` are pre-seeded and enabled; both are
-  pinned to specific SHAs in the `Dockerfile` base stage.
+  pinned to specific SHAs in the `Containerfile` base stage.
 - **Memory is per-project, index is derived.** Each host repo gets its own
   `projects/<key>/memory` + transcripts (keyed on `$PWD` slug + a `cksum` suffix);
   a per-flavor global tier lives at `~/.claude/memory-global/` and is surfaced via

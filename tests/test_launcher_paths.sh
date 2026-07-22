@@ -21,18 +21,28 @@ assert_eq "" "$(ls -A "$home" 2>/dev/null)" "no side effects (vertex defaults)"
 assert_contains "$out" "CFG_DIR=$home/.config/vida-claude-container/vertex"       "vertex config default"
 assert_contains "$out" "STATE_DIR=$home/.local/state/vida-claude-container/vertex" "vertex state default"
 assert_contains "$out" "STATE_CLAUDE_DIR=$home/.local/state/vida-claude-container/vertex/claude"        "vertex .claude dir"
-assert_contains "$out" "HOST_DOTCLAUDE=$home/.local/state/vida-claude-container/vertex/claude.json" "vertex .claude.json"
+assert_contains "$out" "HOST_DOTCLAUDE=$home/.local/state/vida-claude-container/vertex/claude/claude.json" "vertex .claude.json (inside claude/ dir mount)"
+assert_contains "$out" "CRED_GCLOUD_DIR=$home/.local/state/vida-claude-container/vertex/creds/gcloud" "vertex gcloud cred dir"
 assert_contains "$out" "HOST_SETTINGS=$home/.config/vida-claude-container/vertex/settings.override.json" "vertex override path"
 assert_contains "$out" "HOST_ENV_FILE=$home/.config/vida-claude-container/vertex/env"       "vertex env default"
 assert_contains "$out" "HOST_MOUNTS_FILE=$home/.config/vida-claude-container/vertex/mounts" "vertex mounts default"
 assert_contains "$out" "HOST_GITCONFIG=$home/.config/vida-claude-container/vertex/gitconfig" "vertex gitconfig default"
+assert_contains "$out" "RUNTIME=" "print-paths includes RUNTIME"
 rm -rf "$home"
 
 # --- gateway flavor -> distinct per-flavor dirs ---
 res="$(run_paths CLAUDE_FLAVOR=gateway)"; home="$(head -1 <<<"$res")"; out="$(tail -n +2 <<<"$res")"
 assert_contains "$out" "CFG_DIR=$home/.config/vida-claude-container/gateway"        "gateway config default"
 assert_contains "$out" "STATE_DIR=$home/.local/state/vida-claude-container/gateway" "gateway state default"
+assert_contains "$out" "CRED_OKTA_DIR=$home/.local/state/vida-claude-container/gateway/creds/okta" "gateway okta cred dir"
 rm -rf "$home"
+
+# --- --print-runtime resolves the runtime (docker stub present) ---
+rtbin="$(mktemp -d)"; printf '#!/usr/bin/env bash\ncase "$1 $2" in "info "*|"info") exit 0;; esac\nexit 0\n' > "$rtbin/docker"; chmod +x "$rtbin/docker"
+prhome="$(mktemp -d)"
+pr="$(env -i HOME="$prhome" PATH="$rtbin:$PATH" CLAUDE_FLAVOR=vertex bash "$LAUNCHER" --print-runtime 2>/dev/null)"
+assert_contains "$pr" "docker" "--print-runtime resolves docker when only docker present"
+rm -rf "$rtbin" "$prhome"
 
 # --- XDG_CONFIG_HOME / XDG_STATE_HOME honored ---
 res="$(run_paths CLAUDE_FLAVOR=vertex XDG_CONFIG_HOME=/x/cfg XDG_STATE_HOME=/x/state)"
@@ -144,5 +154,25 @@ moved="$(find "$h/.local/state/vida-claude-container/vertex/projects" -name f.md
 if [[ -n "$moved" ]]; then m=found; else m=missing; fi
 assert_eq "found" "$m" "fact landed under per-repo key"
 rm -rf "$h"
+
+# --- host-only subcommands don't require a container runtime (regression) ---
+# migrate-memory is pure host-side (mv); it must work even when no runtime exists.
+noRt="$(mktemp -d)"          # empty state; no runtime on a minimal PATH
+mmhome="$(mktemp -d)"
+mmout="$(env -i HOME="$mmhome" PATH="/usr/bin:/bin" CLAUDE_FLAVOR=vertex bash "$LAUNCHER" migrate-memory 2>&1)"; mmrc=$?
+assert_eq "0" "$mmrc" "migrate-memory exits 0 without a runtime"
+assert_not_contains "$mmout" "no usable container runtime" "migrate-memory does not require a runtime"
+rm -rf "$noRt" "$mmhome"
+
+# --- invoked via a symlink -> SCRIPT_DIR resolves to the real bin/ (regression) ---
+# install.sh symlinks only claude-launcher.sh into ~/.local/bin; the launcher must
+# still locate its sibling container-runtime.sh + runtimes/ via the symlink target,
+# not the symlink's own dir. (All other cases invoke $LAUNCHER by its real path.)
+lnhome="$(mktemp -d)"; lndir="$(mktemp -d)"
+ln -s "$LAUNCHER" "$lndir/claude-vertex"
+slout="$(env -i HOME="$lnhome" PATH="$PATH" bash "$lndir/claude-vertex" --print-paths 2>&1)"
+assert_contains "$slout" "RUNTIME=" "launcher works when invoked via symlink"
+assert_not_contains "$slout" "No such file or directory" "symlink invocation finds container-runtime.sh"
+rm -rf "$lnhome" "$lndir"
 
 finish

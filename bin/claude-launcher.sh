@@ -11,6 +11,7 @@
 #   claude-<flavor> shell     # bash inside the container
 #   claude-vertex auth        # one-time gcloud ADC login (vertex only)
 #   claude-<flavor> migrate-memory        # move legacy shared memory to this repo's key
+#   claude-<flavor> migrate-creds         # copy an old named cred volume into the new bind dir
 #   claude-<flavor> rebuild-memory-index  # regenerate the derived MEMORY.md indexes
 #   claude-<flavor> -- <args> # pass extra args to `claude`
 #
@@ -26,6 +27,17 @@ case "$(basename "$0")" in
 esac
 FLAVOR="${CLAUDE_FLAVOR:-$FLAVOR}"
 
+# Resolve symlinks so SCRIPT_DIR is the real bin/ even when invoked via a
+# symlink (e.g. ~/.local/bin/claude-vertex -> .../src/bin/claude-launcher.sh).
+# bash-3.2-portable readlink loop -- macOS has no `readlink -f`.
+_src="${BASH_SOURCE[0]}"
+while [[ -h "$_src" ]]; do
+    _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
+
 IMAGE="${CLAUDE_IMAGE:-claude-${FLAVOR}:latest}"
 # --- host-side paths (XDG split) --------------------------------------------
 # Config (hand-edited, back-up-able) lives under XDG_CONFIG_HOME; state
@@ -36,8 +48,13 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${NS}/${FLAVOR}"
 
 # State: the .claude dir (mounted to the container's ~/.claude) + .claude.json.
 # No per-flavor override knob -- relocation follows XDG_STATE_HOME only.
+# claude.json lives INSIDE the .claude dir so it rides that (robust) directory
+# bind mount and the container can symlink ~/.claude.json to it -- avoiding a
+# fragile single-file bind mount (those rot on Docker Desktop macOS across
+# sleep/wake). Migrated from the old sibling $STATE_DIR/claude.json below.
 STATE_CLAUDE_DIR="${STATE_DIR}/claude"
-HOST_DOTCLAUDE="${STATE_DIR}/claude.json"
+HOST_DOTCLAUDE="${STATE_CLAUDE_DIR}/claude.json"
+HOST_DOTCLAUDE_LEGACY="${STATE_DIR}/claude.json"
 
 # Per-project isolation. The container always runs at /workspace, so Claude
 # Code's cwd-slug is always "-workspace" and every host repo would otherwise
@@ -52,6 +69,11 @@ _pwd_hash="$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
 PROJECT_KEY="${_pwd_slug}-${_pwd_hash}"
 HOST_PROJECT_DIR="${STATE_DIR}/projects/${PROJECT_KEY}"
 
+# Credentials as host bind-mount DIRECTORIES (uniform across docker/podman/apple;
+# no `volume` subcommand needed). Replaces the old named volumes.
+CRED_GCLOUD_DIR="${STATE_DIR}/creds/gcloud"   # vertex: gcloud ADC
+CRED_OKTA_DIR="${STATE_DIR}/creds/okta"       # gateway: Okta token cache
+
 # Config: env / mounts / gitconfig / settings override. Each keeps an escape-hatch
 # override env var so it can be pointed into a dotfiles repo. (See README for the
 # mounts-file format and the settings.override.json semantics.)
@@ -60,8 +82,22 @@ HOST_MOUNTS_FILE="${CLAUDE_MOUNTS_FILE:-${CFG_DIR}/mounts}"
 HOST_GITCONFIG="${CLAUDE_GITCONFIG:-${CFG_DIR}/gitconfig}"
 HOST_SETTINGS="${CLAUDE_SETTINGS:-${CFG_DIR}/settings.override.json}"
 
-# --print-paths: emit resolved paths and exit BEFORE any side effect (mkdir,
-# seeding, volume creation, docker). Used by tests/test_launcher_paths.sh.
+# Resolve the container runtime (apple>docker>podman; CLAUDE_RUNTIME overrides).
+CR_SOURCED=1 source "$SCRIPT_DIR/container-runtime.sh"
+RUNTIME="$(cr_resolve)"
+
+# --print-runtime: report the resolved runtime + availability, then exit (no side effects).
+if [[ "${1:-}" == "--print-runtime" ]]; then
+    printf 'RUNTIME=%s\n' "$RUNTIME"
+    for rt in apple docker podman; do
+        if cr_available "$rt"; then printf 'available: %s\n' "$rt"; fi
+    done
+    exit 0
+fi
+
+# --print-paths: emit resolved paths and exit BEFORE any mutating side effect
+# (mkdir, seeding, container run). Note cr_resolve already ran a read-only
+# `docker info`/`podman info` probe above. Used by tests/test_launcher_paths.sh.
 if [[ "${1:-}" == "--print-paths" ]]; then
     cat <<EOF
 FLAVOR=$FLAVOR
@@ -71,25 +107,28 @@ STATE_CLAUDE_DIR=$STATE_CLAUDE_DIR
 HOST_DOTCLAUDE=$HOST_DOTCLAUDE
 PROJECT_KEY=$PROJECT_KEY
 HOST_PROJECT_DIR=$HOST_PROJECT_DIR
+CRED_GCLOUD_DIR=$CRED_GCLOUD_DIR
+CRED_OKTA_DIR=$CRED_OKTA_DIR
 HOST_ENV_FILE=$HOST_ENV_FILE
 HOST_MOUNTS_FILE=$HOST_MOUNTS_FILE
 HOST_GITCONFIG=$HOST_GITCONFIG
 HOST_SETTINGS=$HOST_SETTINGS
 IMAGE=$IMAGE
+RUNTIME=$RUNTIME
 EOF
     exit 0
 fi
 # ----------------------------------------------------------------------------
 
-# vertex-only: named docker volume holding gcloud ADC credentials.
-GCLOUD_VOL="${CLAUDE_VERTEX_GCLOUD_VOL:-claude-vertex-gcloud}"
-# gateway-only: named docker volume holding the Okta id_token cache (the baked
-# apiKeyHelper's refresh_token/id_token store). Wipe with `reset-auth`.
-OKTA_VOL="${CLAUDE_GATEWAY_OKTA_VOL:-claude-gateway-okta}"
-
 mkdir -p "$CFG_DIR" "$STATE_CLAUDE_DIR" "$HOST_PROJECT_DIR"
-# Ensure file exists so Docker bind-mounts it as a file, not a directory.
-[[ -f "$HOST_DOTCLAUDE" ]] || : > "$HOST_DOTCLAUDE"
+# One-time migration: the old sibling $STATE_DIR/claude.json moves inside the
+# .claude dir mount (see HOST_DOTCLAUDE above). Only when the new path is absent,
+# so a real file is never clobbered.
+if [[ -f "$HOST_DOTCLAUDE_LEGACY" && ! -e "$HOST_DOTCLAUDE" ]]; then
+    mv "$HOST_DOTCLAUDE_LEGACY" "$HOST_DOTCLAUDE"
+fi
+# Ensure it exists so the entrypoint's symlink target + prefill have a file.
+[[ -e "$HOST_DOTCLAUDE" ]] || : > "$HOST_DOTCLAUDE"
 
 # Seed an empty env file with placeholders. User edits in host editor; values
 # are passed to the container via --env-file.
@@ -162,34 +201,60 @@ EOF
     chmod 600 "$HOST_GITCONFIG"
 fi
 
-# Ensure the flavor's named credential volume exists.
+# Ensure the flavor's credential directory exists (bind-mounted; see run_in_container).
 if [[ "$FLAVOR" == vertex ]]; then
-    docker volume inspect "$GCLOUD_VOL" >/dev/null 2>&1 || docker volume create "$GCLOUD_VOL" >/dev/null
+    mkdir -p "$CRED_GCLOUD_DIR"
 else
-    docker volume inspect "$OKTA_VOL" >/dev/null 2>&1 || docker volume create "$OKTA_VOL" >/dev/null
+    mkdir -p "$CRED_OKTA_DIR"
 fi
 
 run_in_container() {
+    # Enforce a usable runtime + load its driver (rt_* functions) before any real
+    # container operation. Only container ops reach here, so pure host-side
+    # subcommands (migrate-memory, migrate-creds, --print-*) never require a runtime.
+    if [[ "$RUNTIME" == none ]]; then
+        echo "!! no usable container runtime found." >&2
+        if [[ -n "${CLAUDE_RUNTIME:-}" ]]; then
+            echo "   CLAUDE_RUNTIME=$CLAUDE_RUNTIME is not installed/functional on this host." >&2
+        else
+            echo "   install docker or podman (or Apple 'container' on macOS 26+ Apple Silicon)." >&2
+        fi
+        exit 1
+    fi
+    cr_load_driver "$RUNTIME"
+
     local extra_flags=()
     if [[ -t 0 && -t 1 ]]; then
         extra_flags+=(-it)
     fi
-    # Optional: override the baked-in statusline with the host's, if present.
-    local host_statusline="$HOME/.claude/statusline-command.sh"
-    if [[ -f "$host_statusline" ]]; then
-        extra_flags+=(-v "$host_statusline:/opt/claude/statusline.sh:ro")
-    fi
-    # Seeded git identity, mounted ro; the entrypoint's generated ~/.gitconfig
-    # includes it. Replaces the old direct ~/.gitconfig mount (which dragged in
-    # host-only paths + includeIf conditions that never match container paths).
-    if [[ -f "$HOST_GITCONFIG" ]]; then
-        extra_flags+=(-v "$HOST_GITCONFIG:/home/claude/.gitconfig-identity:ro")
-    fi
-    # Settings override: deep-merged onto the seeded settings.json by the
-    # entrypoint. Mounted ro only when it exists -- absent means "no deltas".
+    # Per-run stage directory. Replaces what used to be four fragile single-file
+    # bind mounts (settings override, host MCP creds, statusline, git identity).
+    # Single-file mounts rot on Docker Desktop macOS across host sleep/wake; a
+    # directory mount does not. We read each host source with a normal filesystem
+    # read (no mount), snapshot the ones that exist into a fresh temp dir, and
+    # mount THAT once ro at /opt/claude-stage; the entrypoint consumes them at
+    # boot. mktemp per run avoids races between concurrent launches; the EXIT trap
+    # removes it however the script ends -- normal exit, `set -e` abort, or a
+    # Ctrl-C'd `docker run` (RETURN would miss the last two). run_in_container is
+    # called at most once per invocation, so a single EXIT trap is sufficient.
+    # Only files that exist are staged. STAGE is intentionally NOT `local`: the
+    # EXIT trap runs in the script's global scope, where a function-local would be
+    # out of scope (expanding to '' -> rm -rf '' -> no cleanup).
+    STAGE="$(mktemp -d "${STATE_DIR}/.stage.XXXXXX")"
+    trap 'rm -rf "$STAGE"' EXIT
     if [[ -f "$HOST_SETTINGS" ]]; then
-        extra_flags+=(-v "$HOST_SETTINGS:/home/claude/.claude/settings.override.json:ro")
+        cp "$HOST_SETTINGS" "$STAGE/settings.override.json"
     fi
+    if [[ -f "$HOME/.claude.json" ]]; then
+        cp "$HOME/.claude.json" "$STAGE/host-claude.json"
+    fi
+    if [[ -f "$HOME/.claude/statusline-command.sh" ]]; then
+        cp "$HOME/.claude/statusline-command.sh" "$STAGE/statusline.sh"
+    fi
+    if [[ -f "$HOST_GITCONFIG" ]]; then
+        cp "$HOST_GITCONFIG" "$STAGE/gitconfig-identity"
+    fi
+    extra_flags+=(-v "$STAGE:/opt/claude-stage:ro")
     # GitHub token resolved from the host (gh stores it in the OS keyring by
     # default, so ~/.config/gh alone lacks it). Injected in-memory per run; never
     # written to disk. gh + its credential helper honor GH_TOKEN.
@@ -200,23 +265,14 @@ run_in_container() {
     # NOTE: SSH agent forwarding / host key mounting is intentionally NOT wired
     # here. It is being redesigned as a cross-platform (docker/podman/apple)
     # bring-your-own-provider feature. Until then, push over HTTPS (GH_TOKEN above).
-    # Optional: host ~/.claude.json (the Anthropic-API claude's config) mounted
-    # read-only so the entrypoint can graft its `mcpServers` block into the
-    # container's separate ~/.claude.json. Keeps MCP credentials in one place
-    # on the host without leaking the rest of that file's state. Both flavors
-    # use the same atlassian/context7 MCP servers, so this applies to both.
-    if [[ -f "$HOME/.claude.json" ]]; then
-        extra_flags+=(-v "$HOME/.claude.json:/home/claude/.host-claude.json:ro")
-    fi
+    # (Host ~/.claude.json is staged as host-claude.json above so the entrypoint
+    # can graft its mcpServers env/headers into the container's ~/.claude.json.)
 
     # Flavor-specific mounts.
     if [[ "$FLAVOR" == vertex ]]; then
-        extra_flags+=(-v "$GCLOUD_VOL:/home/claude/.config/gcloud")
+        extra_flags+=(-v "$CRED_GCLOUD_DIR:/home/claude/.config/gcloud")
     else
-        # gateway: mount the Okta token-cache volume where the baked apiKeyHelper
-        # writes (~/.local/share/litellm). Populated by `claude-gateway auth`,
-        # persisted across runs, wiped by `reset-auth`.
-        extra_flags+=(-v "$OKTA_VOL:/home/claude/.local/share/litellm")
+        extra_flags+=(-v "$CRED_OKTA_DIR:/home/claude/.local/share/litellm")
     fi
 
     # Forward the reseed flag so the entrypoint force-overwrites the seeded
@@ -257,7 +313,11 @@ run_in_container() {
         done < "$HOST_MOUNTS_FILE"
     fi
 
-    docker run --rm "${extra_flags[@]}" \
+    # Driver-contributed run flags (userns / remap-skip), one token per line.
+    local rt_flags=()
+    while IFS= read -r _f; do [[ -n "$_f" ]] && rt_flags+=("$_f"); done < <(rt_run_flags)
+
+    rt_run --rm "${extra_flags[@]}" "${rt_flags[@]+"${rt_flags[@]}"}" \
         --env-file "$HOST_ENV_FILE" \
         -e "HOST_UID=$(id -u)" \
         -e "HOST_GID=$(id -g)" \
@@ -265,7 +325,6 @@ run_in_container() {
         -v "$PWD:/workspace" \
         -v "$STATE_CLAUDE_DIR:/home/claude/.claude" \
         -v "$HOST_PROJECT_DIR:/home/claude/.claude/projects/-workspace" \
-        -v "$HOST_DOTCLAUDE:/home/claude/.claude.json" \
         -w /workspace \
         "$IMAGE" "$@"
 }
@@ -279,7 +338,7 @@ case "${1:-}" in
                 # verification code back. Creds persist in the volume.
                 echo ">> running 'gcloud auth application-default login --no-launch-browser' inside container"
                 run_in_container gcloud auth application-default login --no-launch-browser
-                echo ">> done. credentials saved to docker volume: $GCLOUD_VOL"
+                echo ">> done. credentials saved to $CRED_GCLOUD_DIR"
                 ;;
             gateway)
                 # Okta device-authorization login. The baked helper prints a
@@ -287,7 +346,7 @@ case "${1:-}" in
                 # --login-only populates the token cache without emitting a token.
                 echo ">> Okta device login inside container (approve in your browser)"
                 run_in_container /opt/claude/api-key-helper --login-only
-                echo ">> done. token cache saved to docker volume: $OKTA_VOL"
+                echo ">> done. token cache saved to $CRED_OKTA_DIR"
                 ;;
             *)
                 echo "auth: not applicable for the '$FLAVOR' flavor." >&2
@@ -330,6 +389,28 @@ case "${1:-}" in
         mkdir -p "$(dirname "$HOST_PROJECT_DIR")"
         mv "$_legacy" "$HOST_PROJECT_DIR"
         echo ">> migrated $_legacy -> $HOST_PROJECT_DIR"
+        ;;
+    migrate-creds)
+        # One-time: copy an old named docker/podman volume's contents into the new
+        # bind dir. Requires the runtime CLI; apple never used volumes. No-op if
+        # the volume is absent or the target already has data.
+        _vol=""; _dir=""
+        if [[ "$FLAVOR" == vertex ]]; then _vol="claude-vertex-gcloud"; _dir="$CRED_GCLOUD_DIR"; else _vol="claude-gateway-okta"; _dir="$CRED_OKTA_DIR"; fi
+        mkdir -p "$_dir"
+        if [[ -n "$(ls -A "$_dir" 2>/dev/null)" ]]; then
+            echo ">> $_dir already populated; nothing to migrate"; exit 0
+        fi
+        _rtbin="$("$SCRIPT_DIR/container-runtime.sh" --resolve 2>/dev/null)"
+        case "$_rtbin" in
+            docker|podman) : ;;
+            *) echo ">> migrate-creds needs docker or podman (got: $_rtbin)"; exit 1 ;;
+        esac
+        if ! "$_rtbin" volume inspect "$_vol" >/dev/null 2>&1; then
+            echo ">> no volume $_vol; nothing to migrate"; exit 0
+        fi
+        "$_rtbin" run --rm -v "$_vol:/from:ro" -v "$_dir:/to" alpine \
+            sh -c 'cp -a /from/. /to/ 2>/dev/null || true'
+        echo ">> migrated volume $_vol -> $_dir"
         ;;
     rebuild-memory-index)
         # The entrypoint regenerates both memory indexes (project + global tier)
