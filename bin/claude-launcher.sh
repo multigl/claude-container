@@ -11,6 +11,7 @@
 #   claude-<flavor> shell     # bash inside the container
 #   claude-vertex auth        # one-time gcloud ADC login (vertex only)
 #   claude-<flavor> migrate-memory        # move legacy shared memory to this repo's key
+#   claude-<flavor> migrate-creds         # copy an old named cred volume into the new bind dir
 #   claude-<flavor> rebuild-memory-index  # regenerate the derived MEMORY.md indexes
 #   claude-<flavor> -- <args> # pass extra args to `claude`
 #
@@ -25,6 +26,8 @@ case "$(basename "$0")" in
     *)              FLAVOR=vertex  ;;
 esac
 FLAVOR="${CLAUDE_FLAVOR:-$FLAVOR}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 IMAGE="${CLAUDE_IMAGE:-claude-${FLAVOR}:latest}"
 # --- host-side paths (XDG split) --------------------------------------------
@@ -57,6 +60,11 @@ _pwd_hash="$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
 PROJECT_KEY="${_pwd_slug}-${_pwd_hash}"
 HOST_PROJECT_DIR="${STATE_DIR}/projects/${PROJECT_KEY}"
 
+# Credentials as host bind-mount DIRECTORIES (uniform across docker/podman/apple;
+# no `volume` subcommand needed). Replaces the old named volumes.
+CRED_GCLOUD_DIR="${STATE_DIR}/creds/gcloud"   # vertex: gcloud ADC
+CRED_OKTA_DIR="${STATE_DIR}/creds/okta"       # gateway: Okta token cache
+
 # Config: env / mounts / gitconfig / settings override. Each keeps an escape-hatch
 # override env var so it can be pointed into a dotfiles repo. (See README for the
 # mounts-file format and the settings.override.json semantics.)
@@ -76,6 +84,8 @@ STATE_CLAUDE_DIR=$STATE_CLAUDE_DIR
 HOST_DOTCLAUDE=$HOST_DOTCLAUDE
 PROJECT_KEY=$PROJECT_KEY
 HOST_PROJECT_DIR=$HOST_PROJECT_DIR
+CRED_GCLOUD_DIR=$CRED_GCLOUD_DIR
+CRED_OKTA_DIR=$CRED_OKTA_DIR
 HOST_ENV_FILE=$HOST_ENV_FILE
 HOST_MOUNTS_FILE=$HOST_MOUNTS_FILE
 HOST_GITCONFIG=$HOST_GITCONFIG
@@ -85,12 +95,6 @@ EOF
     exit 0
 fi
 # ----------------------------------------------------------------------------
-
-# vertex-only: named docker volume holding gcloud ADC credentials.
-GCLOUD_VOL="${CLAUDE_VERTEX_GCLOUD_VOL:-claude-vertex-gcloud}"
-# gateway-only: named docker volume holding the Okta id_token cache (the baked
-# apiKeyHelper's refresh_token/id_token store). Wipe with `reset-auth`.
-OKTA_VOL="${CLAUDE_GATEWAY_OKTA_VOL:-claude-gateway-okta}"
 
 mkdir -p "$CFG_DIR" "$STATE_CLAUDE_DIR" "$HOST_PROJECT_DIR"
 # One-time migration: the old sibling $STATE_DIR/claude.json moves inside the
@@ -173,11 +177,11 @@ EOF
     chmod 600 "$HOST_GITCONFIG"
 fi
 
-# Ensure the flavor's named credential volume exists.
+# Ensure the flavor's credential directory exists (bind-mounted; see run_in_container).
 if [[ "$FLAVOR" == vertex ]]; then
-    docker volume inspect "$GCLOUD_VOL" >/dev/null 2>&1 || docker volume create "$GCLOUD_VOL" >/dev/null
+    mkdir -p "$CRED_GCLOUD_DIR"
 else
-    docker volume inspect "$OKTA_VOL" >/dev/null 2>&1 || docker volume create "$OKTA_VOL" >/dev/null
+    mkdir -p "$CRED_OKTA_DIR"
 fi
 
 run_in_container() {
@@ -228,12 +232,9 @@ run_in_container() {
 
     # Flavor-specific mounts.
     if [[ "$FLAVOR" == vertex ]]; then
-        extra_flags+=(-v "$GCLOUD_VOL:/home/claude/.config/gcloud")
+        extra_flags+=(-v "$CRED_GCLOUD_DIR:/home/claude/.config/gcloud")
     else
-        # gateway: mount the Okta token-cache volume where the baked apiKeyHelper
-        # writes (~/.local/share/litellm). Populated by `claude-gateway auth`,
-        # persisted across runs, wiped by `reset-auth`.
-        extra_flags+=(-v "$OKTA_VOL:/home/claude/.local/share/litellm")
+        extra_flags+=(-v "$CRED_OKTA_DIR:/home/claude/.local/share/litellm")
     fi
 
     # Forward the reseed flag so the entrypoint force-overwrites the seeded
@@ -295,7 +296,7 @@ case "${1:-}" in
                 # verification code back. Creds persist in the volume.
                 echo ">> running 'gcloud auth application-default login --no-launch-browser' inside container"
                 run_in_container gcloud auth application-default login --no-launch-browser
-                echo ">> done. credentials saved to docker volume: $GCLOUD_VOL"
+                echo ">> done. credentials saved to $CRED_GCLOUD_DIR"
                 ;;
             gateway)
                 # Okta device-authorization login. The baked helper prints a
@@ -303,7 +304,7 @@ case "${1:-}" in
                 # --login-only populates the token cache without emitting a token.
                 echo ">> Okta device login inside container (approve in your browser)"
                 run_in_container /opt/claude/api-key-helper --login-only
-                echo ">> done. token cache saved to docker volume: $OKTA_VOL"
+                echo ">> done. token cache saved to $CRED_OKTA_DIR"
                 ;;
             *)
                 echo "auth: not applicable for the '$FLAVOR' flavor." >&2
@@ -346,6 +347,28 @@ case "${1:-}" in
         mkdir -p "$(dirname "$HOST_PROJECT_DIR")"
         mv "$_legacy" "$HOST_PROJECT_DIR"
         echo ">> migrated $_legacy -> $HOST_PROJECT_DIR"
+        ;;
+    migrate-creds)
+        # One-time: copy an old named docker/podman volume's contents into the new
+        # bind dir. Requires the runtime CLI; apple never used volumes. No-op if
+        # the volume is absent or the target already has data.
+        _vol=""; _dir=""
+        if [[ "$FLAVOR" == vertex ]]; then _vol="claude-vertex-gcloud"; _dir="$CRED_GCLOUD_DIR"; else _vol="claude-gateway-okta"; _dir="$CRED_OKTA_DIR"; fi
+        mkdir -p "$_dir"
+        if [[ -n "$(ls -A "$_dir" 2>/dev/null)" ]]; then
+            echo ">> $_dir already populated; nothing to migrate"; exit 0
+        fi
+        _rtbin="$("$SCRIPT_DIR/container-runtime.sh" --resolve 2>/dev/null)"
+        case "$_rtbin" in
+            docker|podman) : ;;
+            *) echo ">> migrate-creds needs docker or podman (got: $_rtbin)"; exit 1 ;;
+        esac
+        if ! "$_rtbin" volume inspect "$_vol" >/dev/null 2>&1; then
+            echo ">> no volume $_vol; nothing to migrate"; exit 0
+        fi
+        "$_rtbin" run --rm -v "$_vol:/from:ro" -v "$_dir:/to" alpine \
+            sh -c 'cp -a /from/. /to/ 2>/dev/null || true'
+        echo ">> migrated volume $_vol -> $_dir"
         ;;
     rebuild-memory-index)
         # The entrypoint regenerates both memory indexes (project + global tier)
