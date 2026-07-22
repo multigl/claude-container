@@ -93,7 +93,7 @@ reset-auth:
 # Remove the {{flavor}} image (via the resolved runtime)
 clean:
     @rt="$({{here}}/bin/container-runtime.sh --resolve)"; bin="$rt"; [ "$rt" = apple ] && bin=container; \
-        [ "$rt" = none ] || $bin rmi {{image}} || true
+        [ "$rt" = none ] || $bin image rm {{image}} || true
 
 # Self-check: runtime resolved, image built, flavor auth present, wrapper on PATH
 doctor:

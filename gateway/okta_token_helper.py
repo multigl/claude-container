@@ -15,7 +15,8 @@ concurrent Claude Code instances can't corrupt the cache or stampede the token e
 (and, if Okta refresh-token rotation is ever enabled, can't trip reuse-detection).
 
 In the claude-gateway container this file is baked at /opt/claude/api-key-helper and
-its cache directory (~/.local/share/litellm) is a wipeable docker volume; `claude-gateway
+its cache directory (~/.local/share/litellm) is a wipeable bind dir ($STATE_DIR/creds/okta,
+wiped by `just reset-auth`); `claude-gateway
 auth` runs it once with --login-only to complete the device login. It also runs
 standalone: install to ~/.local/bin/okta-token-helper (chmod 0755) and configure Claude
 Code via ~/.claude/settings.json:

@@ -308,7 +308,7 @@ run_in_container() {
     local rt_flags=()
     while IFS= read -r _f; do [[ -n "$_f" ]] && rt_flags+=("$_f"); done < <(rt_run_flags)
 
-    rt_run --rm "${extra_flags[@]}" "${rt_flags[@]}" \
+    rt_run --rm "${extra_flags[@]}" "${rt_flags[@]+"${rt_flags[@]}"}" \
         --env-file "$HOST_ENV_FILE" \
         -e "HOST_UID=$(id -u)" \
         -e "HOST_GID=$(id -g)" \
