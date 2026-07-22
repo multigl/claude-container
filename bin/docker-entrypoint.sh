@@ -7,6 +7,21 @@
 # Runs as root briefly to chown the bind-mounted volumes (named docker volume
 # and host dir both arrive root-owned), then drops to the `claude` user via
 # gosu. Claude Code refuses bypassPermissions mode when running as root.
+
+# Remap-gate predicate (pure; unit-tested by tests/test_entrypoint_remap.sh).
+# Remap the claude user to the host UID/GID unless the runtime already handled
+# ownership (podman rootless keep-id sets _CLAUDE_UID_REMAP=skip) or there's no
+# host UID / it already matches.
+cr_should_remap() {  # cr_should_remap <current_claude_uid>
+    [[ "${_CLAUDE_UID_REMAP:-}" == skip ]] && return 1
+    [[ -n "${HOST_UID:-}" ]] || return 1
+    [[ "${HOST_UID}" != "$1" ]]
+}
+
+# When sourced as a library (tests), define functions then stop before any
+# container-only boot logic. Harmless when executed normally (var is unset).
+[[ "${CLAUDE_ENTRYPOINT_LIB:-}" == 1 ]] && return 0
+
 set -euo pipefail
 
 SEED=/opt/claude-seed
@@ -28,7 +43,7 @@ export HOME=/home/claude
 # them in. Lets writes into the $PWD bind-mount land with host ownership
 # on Linux engines (macOS Docker translates implicitly, so this is a no-op
 # there). Build-time UID is just a placeholder.
-if [[ -n "${HOST_UID:-}" && "$HOST_UID" != "$(id -u claude)" ]]; then
+if cr_should_remap "$(id -u claude)"; then
     groupmod -g "${HOST_GID:-$HOST_UID}" claude 2>/dev/null || true
     usermod -u "$HOST_UID" -g "${HOST_GID:-$HOST_UID}" claude
 fi
