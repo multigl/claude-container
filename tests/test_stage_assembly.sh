@@ -16,11 +16,10 @@ run_launch() {
     local bin rec; bin="$(mktemp -d)"; rec="$(mktemp -d)"
     cat > "$bin/docker" <<'STUB'
 #!/usr/bin/env bash
+case "$1 $2" in "info "*|"info") exit 0 ;; esac
 { for a in "$@"; do printf '%s\n' "$a"; done; } > "$REC/argv"
 for a in "$@"; do
-  case "$a" in
-    *:/opt/claude-stage:ro) ls -A "${a%:/opt/claude-stage:ro}" 2>/dev/null | sort > "$REC/stage-ls" ;;
-  esac
+  case "$a" in *:/opt/claude-stage:ro) ls -A "${a%:/opt/claude-stage:ro}" 2>/dev/null | sort > "$REC/stage-ls" ;; esac
 done
 exit 0
 STUB

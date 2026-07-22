@@ -27,6 +27,7 @@ assert_contains "$out" "HOST_SETTINGS=$home/.config/vida-claude-container/vertex
 assert_contains "$out" "HOST_ENV_FILE=$home/.config/vida-claude-container/vertex/env"       "vertex env default"
 assert_contains "$out" "HOST_MOUNTS_FILE=$home/.config/vida-claude-container/vertex/mounts" "vertex mounts default"
 assert_contains "$out" "HOST_GITCONFIG=$home/.config/vida-claude-container/vertex/gitconfig" "vertex gitconfig default"
+assert_contains "$out" "RUNTIME=" "print-paths includes RUNTIME"
 rm -rf "$home"
 
 # --- gateway flavor -> distinct per-flavor dirs ---
@@ -35,6 +36,13 @@ assert_contains "$out" "CFG_DIR=$home/.config/vida-claude-container/gateway"    
 assert_contains "$out" "STATE_DIR=$home/.local/state/vida-claude-container/gateway" "gateway state default"
 assert_contains "$out" "CRED_OKTA_DIR=$home/.local/state/vida-claude-container/gateway/creds/okta" "gateway okta cred dir"
 rm -rf "$home"
+
+# --- --print-runtime resolves the runtime (docker stub present) ---
+rtbin="$(mktemp -d)"; printf '#!/usr/bin/env bash\ncase "$1 $2" in "info "*|"info") exit 0;; esac\nexit 0\n' > "$rtbin/docker"; chmod +x "$rtbin/docker"
+prhome="$(mktemp -d)"
+pr="$(env -i HOME="$prhome" PATH="$rtbin:$PATH" CLAUDE_FLAVOR=vertex bash "$LAUNCHER" --print-runtime 2>/dev/null)"
+assert_contains "$pr" "docker" "--print-runtime resolves docker when only docker present"
+rm -rf "$rtbin" "$prhome"
 
 # --- XDG_CONFIG_HOME / XDG_STATE_HOME honored ---
 res="$(run_paths CLAUDE_FLAVOR=vertex XDG_CONFIG_HOME=/x/cfg XDG_STATE_HOME=/x/state)"

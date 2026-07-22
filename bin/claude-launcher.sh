@@ -73,6 +73,19 @@ HOST_MOUNTS_FILE="${CLAUDE_MOUNTS_FILE:-${CFG_DIR}/mounts}"
 HOST_GITCONFIG="${CLAUDE_GITCONFIG:-${CFG_DIR}/gitconfig}"
 HOST_SETTINGS="${CLAUDE_SETTINGS:-${CFG_DIR}/settings.override.json}"
 
+# Resolve the container runtime (apple>docker>podman; CLAUDE_RUNTIME overrides).
+CR_SOURCED=1 source "$SCRIPT_DIR/container-runtime.sh"
+RUNTIME="$(cr_resolve)"
+
+# --print-runtime: report the resolved runtime + availability, then exit (no side effects).
+if [[ "${1:-}" == "--print-runtime" ]]; then
+    printf 'RUNTIME=%s\n' "$RUNTIME"
+    for rt in apple docker podman; do
+        if cr_available "$rt"; then printf 'available: %s\n' "$rt"; fi
+    done
+    exit 0
+fi
+
 # --print-paths: emit resolved paths and exit BEFORE any side effect (mkdir,
 # seeding, volume creation, docker). Used by tests/test_launcher_paths.sh.
 if [[ "${1:-}" == "--print-paths" ]]; then
@@ -91,10 +104,24 @@ HOST_MOUNTS_FILE=$HOST_MOUNTS_FILE
 HOST_GITCONFIG=$HOST_GITCONFIG
 HOST_SETTINGS=$HOST_SETTINGS
 IMAGE=$IMAGE
+RUNTIME=$RUNTIME
 EOF
     exit 0
 fi
 # ----------------------------------------------------------------------------
+
+# Enforce a usable runtime + load its driver (rt_* functions) before any real
+# container operation. Runs only past the print-only early exits above.
+if [[ "$RUNTIME" == none ]]; then
+    echo "!! no usable container runtime found." >&2
+    if [[ -n "${CLAUDE_RUNTIME:-}" ]]; then
+        echo "   CLAUDE_RUNTIME=$CLAUDE_RUNTIME is not installed/functional on this host." >&2
+    else
+        echo "   install docker or podman (or Apple 'container' on macOS 26+ Apple Silicon)." >&2
+    fi
+    exit 1
+fi
+cr_load_driver "$RUNTIME"
 
 mkdir -p "$CFG_DIR" "$STATE_CLAUDE_DIR" "$HOST_PROJECT_DIR"
 # One-time migration: the old sibling $STATE_DIR/claude.json moves inside the
@@ -275,7 +302,11 @@ run_in_container() {
         done < "$HOST_MOUNTS_FILE"
     fi
 
-    docker run --rm "${extra_flags[@]}" \
+    # Driver-contributed run flags (userns / remap-skip), one token per line.
+    local rt_flags=()
+    while IFS= read -r _f; do [[ -n "$_f" ]] && rt_flags+=("$_f"); done < <(rt_run_flags)
+
+    rt_run --rm "${extra_flags[@]}" "${rt_flags[@]}" \
         --env-file "$HOST_ENV_FILE" \
         -e "HOST_UID=$(id -u)" \
         -e "HOST_GID=$(id -g)" \
