@@ -23,4 +23,29 @@ assert_contains "$build" "docker build"          "docker: build uses docker"
 assert_contains "$build" "-f /ctx/Containerfile" "docker: build -f Containerfile"
 assert_contains "$build" "--target vertex"       "docker: build --target"
 
+# podman driver -------------------------------------------------------------
+# rt_run_flags depends on getenforce (SELinux); stub it per case via PATH.
+podman_flags_with_selinux() {  # arg: Enforcing|Disabled|absent
+    local bin; bin="$(mktemp -d)"
+    if [[ "$1" != absent ]]; then
+        printf '#!/usr/bin/env bash\necho %s\n' "$1" > "$bin/getenforce"; chmod +x "$bin/getenforce"
+    fi
+    ( export PATH="$bin:$PATH"; load_driver podman; rt_run_flags )
+    rm -rf "$bin"
+}
+load_driver podman
+assert_eq "podman" "$(rt_bin)" "podman rt_bin"
+f="$(rt_run_flags)"
+assert_contains "$f" "--userns=keep-id:uid=1000,gid=1000" "podman: keep-id userns"
+assert_contains "$f" "_CLAUDE_UID_REMAP=skip"             "podman: remap-skip signal"
+enf="$(podman_flags_with_selinux Enforcing)"
+assert_contains "$enf" "label=disable"  "podman: SELinux enforcing -> label=disable"
+noenf="$(podman_flags_with_selinux Disabled)"
+assert_not_contains "$noenf" "label=disable" "podman: SELinux disabled -> no label opt"
+absent="$(podman_flags_with_selinux absent)"
+assert_not_contains "$absent" "label=disable" "podman: no getenforce -> no label opt"
+bp="$(rt_build_cmd gateway claude-gateway:latest /ctx)"
+assert_contains "$bp" "podman build" "podman: build uses podman"
+assert_contains "$bp" "-f /ctx/Containerfile" "podman: build -f Containerfile"
+
 finish

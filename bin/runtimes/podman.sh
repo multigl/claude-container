@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# podman driver (rootless Linux). Rootless podman maps the host user to container
+# root, so bind mounts arrive root-owned and the entrypoint's usermod/chown remap
+# is wrong. Fix: keep-id maps the host user onto the image's claude user (uid
+# 1000), and we signal the entrypoint to SKIP its remap. On SELinux-enforcing
+# hosts, disable label confinement for this container (simpler + safer than
+# per-mount :z relabeling, which would relabel shared host dirs like ~/.claude).
+
+rt_bin() { printf 'podman\n'; }
+
+# SELinux enforcing? (getenforce present and not "Disabled").
+_rt_selinux_on() {
+    command -v getenforce >/dev/null 2>&1 || return 1
+    local s; s="$(getenforce 2>/dev/null)"
+    [[ -n "$s" && "$s" != "Disabled" ]]
+}
+
+rt_run_flags() {
+    printf '%s\n' '--userns=keep-id:uid=1000,gid=1000'
+    printf '%s\n' '-e'
+    printf '%s\n' '_CLAUDE_UID_REMAP=skip'
+    if _rt_selinux_on; then
+        printf '%s\n' '--security-opt'
+        printf '%s\n' 'label=disable'
+    fi
+}
+
+rt_build_cmd() { printf 'podman build -f %s/Containerfile --target %s -t %s %s\n' "$3" "$1" "$2" "$3"; }
+
+rt_run() { podman run "$@"; }
