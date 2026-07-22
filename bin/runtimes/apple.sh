@@ -9,6 +9,10 @@ rt_bin() { printf 'container\n'; }
 
 rt_run_flags() { :; }
 
-rt_build_cmd() { printf 'container build -f %s/Containerfile --target %s -t %s %s\n' "$3" "$1" "$2" "$3"; }
+rt_build_cmd() {  # rt_build_cmd <flavor> <image> <context>
+    local ba=""
+    [[ -n "${CLAUDE_CODE_VERSION:-}" ]] && ba=" --build-arg CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}"
+    printf 'container build -f %s/Containerfile --target %s -t %s%s %s\n' "$3" "$1" "$2" "$ba" "$3"
+}
 
 rt_run() { container run "$@"; }

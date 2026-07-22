@@ -11,7 +11,9 @@ rt_run_flags() { :; }
 
 # Echo the build command (as a string; caller evals or prints).
 rt_build_cmd() {  # rt_build_cmd <flavor> <image> <context>
-    printf 'docker build -f %s/Containerfile --target %s -t %s %s\n' "$3" "$1" "$2" "$3"
+    local ba=""
+    [[ -n "${CLAUDE_CODE_VERSION:-}" ]] && ba=" --build-arg CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}"
+    printf 'docker build -f %s/Containerfile --target %s -t %s%s %s\n' "$3" "$1" "$2" "$ba" "$3"
 }
 
 # Run the container: bin + --rm + caller flags + image + args.

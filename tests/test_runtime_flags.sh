@@ -59,4 +59,10 @@ assert_contains "$ba" "container build" "apple: build uses container"
 assert_contains "$ba" "-f /ctx/Containerfile" "apple: build -f Containerfile"
 assert_contains "$ba" "--target vertex" "apple: build --target"
 
+# build-arg forwarding (CLAUDE_CODE_VERSION) -----------------------------------
+bc="$(CLAUDE_CODE_VERSION=9.9.9 bash -c 'source '"$CRDIR"'/container-runtime.sh; source '"$CRDIR"'/runtimes/docker.sh; rt_build_cmd vertex img /ctx')"
+assert_contains "$bc" "--build-arg CLAUDE_CODE_VERSION=9.9.9" "docker: build arg forwarded when CLAUDE_CODE_VERSION set"
+bc2="$(bash -c 'source '"$CRDIR"'/container-runtime.sh; source '"$CRDIR"'/runtimes/docker.sh; rt_build_cmd vertex img /ctx')"
+assert_not_contains "$bc2" "build-arg" "docker: no build arg when CLAUDE_CODE_VERSION unset"
+
 finish

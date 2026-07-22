@@ -66,6 +66,21 @@ cr_load_driver() {  # cr_load_driver <runtime>
 if [[ "${CR_SOURCED:-0}" != 1 ]]; then
     case "${1:-}" in
         --resolve) cr_resolve ;;
-        *) cr_resolve >/dev/null ;;  # placeholder; extended in later tasks
+        build)
+            shift
+            flavor=""; image=""; ctx="."
+            while [[ $# -gt 0 ]]; do case "$1" in
+                --flavor) flavor="$2"; shift 2 ;;
+                --image)  image="$2";  shift 2 ;;
+                --context) ctx="$2";   shift 2 ;;
+                *) shift ;;
+            esac; done
+            rt="$(cr_resolve)"; [[ "$rt" == none ]] && { echo "no runtime" >&2; exit 1; }
+            cr_load_driver "$rt"
+            cmd="$(rt_build_cmd "$flavor" "$image" "$ctx")"
+            echo ">> [$rt] $cmd"
+            eval "$cmd"
+            ;;
+        *) echo "usage: container-runtime.sh --resolve | build --flavor F --image I [--context DIR]" >&2; exit 2 ;;
     esac
 fi
