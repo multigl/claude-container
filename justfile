@@ -73,18 +73,11 @@ reseed:
 
 # Symlink wrapper to {{bin_dir}}/claude-{{flavor}}
 install:
-    mkdir -p {{bin_dir}}
-    ln -sf {{here}}/bin/claude-launcher.sh {{bin_dir}}/claude-{{flavor}}
-    @echo "installed: {{bin_dir}}/claude-{{flavor}}"
-    @echo "ensure {{bin_dir}} is on PATH"
+    {{here}}/install.sh --local --flavor {{flavor}}
 
 # Symlink BOTH flavor commands (claude-vertex + claude-gateway) to the launcher
 install-all:
-    mkdir -p {{bin_dir}}
-    ln -sf {{here}}/bin/claude-launcher.sh {{bin_dir}}/claude-vertex
-    ln -sf {{here}}/bin/claude-launcher.sh {{bin_dir}}/claude-gateway
-    @echo "installed: {{bin_dir}}/claude-vertex and {{bin_dir}}/claude-gateway"
-    @echo "ensure {{bin_dir}} is on PATH"
+    {{here}}/install.sh --local --all
 
 # Remove the wrapper symlinks
 uninstall:
