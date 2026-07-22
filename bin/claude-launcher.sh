@@ -86,8 +86,9 @@ if [[ "${1:-}" == "--print-runtime" ]]; then
     exit 0
 fi
 
-# --print-paths: emit resolved paths and exit BEFORE any side effect (mkdir,
-# seeding, volume creation, docker). Used by tests/test_launcher_paths.sh.
+# --print-paths: emit resolved paths and exit BEFORE any mutating side effect
+# (mkdir, seeding, container run). Note cr_resolve already ran a read-only
+# `docker info`/`podman info` probe above. Used by tests/test_launcher_paths.sh.
 if [[ "${1:-}" == "--print-paths" ]]; then
     cat <<EOF
 FLAVOR=$FLAVOR
@@ -109,19 +110,6 @@ EOF
     exit 0
 fi
 # ----------------------------------------------------------------------------
-
-# Enforce a usable runtime + load its driver (rt_* functions) before any real
-# container operation. Runs only past the print-only early exits above.
-if [[ "$RUNTIME" == none ]]; then
-    echo "!! no usable container runtime found." >&2
-    if [[ -n "${CLAUDE_RUNTIME:-}" ]]; then
-        echo "   CLAUDE_RUNTIME=$CLAUDE_RUNTIME is not installed/functional on this host." >&2
-    else
-        echo "   install docker or podman (or Apple 'container' on macOS 26+ Apple Silicon)." >&2
-    fi
-    exit 1
-fi
-cr_load_driver "$RUNTIME"
 
 mkdir -p "$CFG_DIR" "$STATE_CLAUDE_DIR" "$HOST_PROJECT_DIR"
 # One-time migration: the old sibling $STATE_DIR/claude.json moves inside the
@@ -212,6 +200,20 @@ else
 fi
 
 run_in_container() {
+    # Enforce a usable runtime + load its driver (rt_* functions) before any real
+    # container operation. Only container ops reach here, so pure host-side
+    # subcommands (migrate-memory, migrate-creds, --print-*) never require a runtime.
+    if [[ "$RUNTIME" == none ]]; then
+        echo "!! no usable container runtime found." >&2
+        if [[ -n "${CLAUDE_RUNTIME:-}" ]]; then
+            echo "   CLAUDE_RUNTIME=$CLAUDE_RUNTIME is not installed/functional on this host." >&2
+        else
+            echo "   install docker or podman (or Apple 'container' on macOS 26+ Apple Silicon)." >&2
+        fi
+        exit 1
+    fi
+    cr_load_driver "$RUNTIME"
+
     local extra_flags=()
     if [[ -t 0 && -t 1 ]]; then
         extra_flags+=(-it)

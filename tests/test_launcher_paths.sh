@@ -155,4 +155,13 @@ if [[ -n "$moved" ]]; then m=found; else m=missing; fi
 assert_eq "found" "$m" "fact landed under per-repo key"
 rm -rf "$h"
 
+# --- host-only subcommands don't require a container runtime (regression) ---
+# migrate-memory is pure host-side (mv); it must work even when no runtime exists.
+noRt="$(mktemp -d)"          # empty state; no runtime on a minimal PATH
+mmhome="$(mktemp -d)"
+mmout="$(env -i HOME="$mmhome" PATH="/usr/bin:/bin" CLAUDE_FLAVOR=vertex bash "$LAUNCHER" migrate-memory 2>&1)"; mmrc=$?
+assert_eq "0" "$mmrc" "migrate-memory exits 0 without a runtime"
+assert_not_contains "$mmout" "no usable container runtime" "migrate-memory does not require a runtime"
+rm -rf "$noRt" "$mmhome"
+
 finish
