@@ -27,7 +27,16 @@ case "$(basename "$0")" in
 esac
 FLAVOR="${CLAUDE_FLAVOR:-$FLAVOR}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlinks so SCRIPT_DIR is the real bin/ even when invoked via a
+# symlink (e.g. ~/.local/bin/claude-vertex -> .../src/bin/claude-launcher.sh).
+# bash-3.2-portable readlink loop -- macOS has no `readlink -f`.
+_src="${BASH_SOURCE[0]}"
+while [[ -h "$_src" ]]; do
+    _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
 
 IMAGE="${CLAUDE_IMAGE:-claude-${FLAVOR}:latest}"
 # --- host-side paths (XDG split) --------------------------------------------

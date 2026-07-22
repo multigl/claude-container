@@ -17,7 +17,10 @@ plan() {  # plan KEY=VAL ...  (HAVE_APPLE, OSTYPE_STUB, ARCH_STUB, MACOS_MAJOR, 
     chmod +x "$bin/uname" "$bin/sw_vers"
     [[ "${HAVE_APPLE-}" == 1 ]] || rm -f "$bin/container"
     local home; home="$(mktemp -d)"
-    env HOME="$home" PATH="$bin:$PATH" bash "$INSTALL" --local --dry-run 2>&1
+    # Hermetic PATH: only the stub dir + system coreutils, so the real
+    # /usr/local/bin (or /opt/homebrew/bin) `container`/`docker` can't leak in and
+    # defeat the "no apple installed" simulation (container stub deleted above).
+    env HOME="$home" PATH="$bin:/usr/bin:/bin" bash "$INSTALL" --local --dry-run 2>&1
     rm -rf "$bin" "$home"
     unset OSTYPE_STUB ARCH_STUB MACOS_MAJOR HAVE_APPLE CLAUDE_SKIP_APPLE_GATE
 }

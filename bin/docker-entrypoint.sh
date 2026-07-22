@@ -53,10 +53,13 @@ mkdir -p "$DEST"
 # Only chown the writable bind-mounts we actually need to own. A blanket
 # `chown -R /home/claude` would traverse ro mounts and fail with EROFS, killing
 # the container under set -e (the ro inputs now arrive under /opt/claude-stage,
-# outside /home/claude, but keep this scoped regardless).
-chown claude:claude /home/claude
-chown -R claude:claude "$DEST"
-[[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && chown -R claude:claude "$GCLOUD_DIR"
+# outside /home/claude, but keep this scoped regardless). Best-effort: on
+# file-share runtimes (Apple `container`, Docker Desktop) chowning a bind mount
+# returns EPERM because the VM file share already translates ownership -- tolerate
+# it (docker/podman rootful still chown successfully).
+chown claude:claude /home/claude 2>/dev/null || true
+chown -R claude:claude "$DEST" 2>/dev/null || true
+[[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && { chown -R claude:claude "$GCLOUD_DIR" 2>/dev/null || true; }
 
 # Persist ~/.claude.json inside the ~/.claude directory bind mount instead of via
 # a fragile single-file mount (those rot on Docker Desktop macOS across host
@@ -68,7 +71,7 @@ chown -R claude:claude "$DEST"
 ln -sfn "$DEST/claude.json" "$DOTCLAUDE"
 # Gateway: the Okta token-cache volume arrives root-owned; hand it to claude so
 # the non-root apiKeyHelper can write its cache. Dir exists only when mounted.
-[[ -d /home/claude/.local/share/litellm ]] && chown -R claude:claude /home/claude/.local/share/litellm
+[[ -d /home/claude/.local/share/litellm ]] && { chown -R claude:claude /home/claude/.local/share/litellm 2>/dev/null || true; }
 
 # Normally seed only fills in missing files (--ignore-existing / cp -n) so user
 # edits survive. CLAUDE_RESEED=1 (set by `claude-<flavor> reseed`) instead
@@ -84,7 +87,12 @@ if [[ -d "$SEED" ]]; then
         cp_mode=(-rn)
     fi
     if command -v rsync >/dev/null 2>&1; then
-        gosu claude rsync -a "${rsync_mode[@]}" \
+        # --no-times/--omit-dir-times: Apple `container`'s VM file share rejects
+        # utimensat on the bind mount (EPERM), which `-a` (implies -t) would hit,
+        # failing the whole sync (exit 23) under set -e. Seed mtimes are irrelevant
+        # (--ignore-existing keys on name, not time), so drop time preservation;
+        # perms/symlinks/recursion still apply and work on the file share.
+        gosu claude rsync -a --no-times --omit-dir-times "${rsync_mode[@]}" \
             --exclude=dotclaude.json \
             "$SEED"/ "$DEST"/
     else

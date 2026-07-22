@@ -164,4 +164,15 @@ assert_eq "0" "$mmrc" "migrate-memory exits 0 without a runtime"
 assert_not_contains "$mmout" "no usable container runtime" "migrate-memory does not require a runtime"
 rm -rf "$noRt" "$mmhome"
 
+# --- invoked via a symlink -> SCRIPT_DIR resolves to the real bin/ (regression) ---
+# install.sh symlinks only claude-launcher.sh into ~/.local/bin; the launcher must
+# still locate its sibling container-runtime.sh + runtimes/ via the symlink target,
+# not the symlink's own dir. (All other cases invoke $LAUNCHER by its real path.)
+lnhome="$(mktemp -d)"; lndir="$(mktemp -d)"
+ln -s "$LAUNCHER" "$lndir/claude-vertex"
+slout="$(env -i HOME="$lnhome" PATH="$PATH" bash "$lndir/claude-vertex" --print-paths 2>&1)"
+assert_contains "$slout" "RUNTIME=" "launcher works when invoked via symlink"
+assert_not_contains "$slout" "No such file or directory" "symlink invocation finds container-runtime.sh"
+rm -rf "$lnhome" "$lndir"
+
 finish

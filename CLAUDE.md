@@ -54,9 +54,17 @@ The image runs under one of three container runtimes, chosen by a dispatcher —
   SELinux-enforcing hosts it adds `--security-opt label=disable` (chosen over
   per-mount `:z` relabeling, which would relabel shared host dirs like `~/.claude`).
   `_CLAUDE_UID_REMAP` is internal — per-run `-e` only, never in the env file.
-- **apple `container`** (macOS 26+ on Apple Silicon only; v1.1.0, stable): bind-mount
-  ownership is translated by its VM file share (like Docker Desktop), so the
-  entrypoint remap is a no-op (no userns flag, no remap-skip signal).
+- **apple `container`** (macOS 26+ on Apple Silicon only; v1.1.0, stable): its VM
+  bind-mount file share **passes host UIDs through** (unlike Docker Desktop's
+  uid-agnostic gRPC-FUSE), so apple uses the **same `HOST_UID` remap path as
+  docker** — no userns flag, no `_CLAUDE_UID_REMAP=skip`. The usermod remap is
+  load-bearing here: with `claude` remapped to the host uid, in-container ownership
+  matches what the share presents and the seed rsync never attempts chown/chgrp;
+  skipping it (claude left at 1000) makes rsync try to fix the mismatch and abort
+  (EPERM). Separately, the share **rejects the `chown`/`utimensat` syscalls on the
+  mount regardless of uid**, so the entrypoint's explicit mount chowns are
+  best-effort (`… 2>/dev/null || true`) and the seed rsync drops time preservation
+  (`--no-times --omit-dir-times`).
 
 `just doctor` has a `== runtime ==` section (resolved runtime + availability).
 `just build`/`build-vertex`/`build-gateway`/`update` route through the dispatcher;

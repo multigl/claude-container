@@ -53,7 +53,7 @@ load_driver apple
 assert_eq "container" "$(rt_bin)" "apple rt_bin is container"
 fa="$(rt_run_flags)"
 assert_not_contains "$fa" "userns"            "apple: no userns flag"
-assert_not_contains "$fa" "_CLAUDE_UID_REMAP" "apple: remap no-op (VM file-share translates)"
+assert_not_contains "$fa" "_CLAUDE_UID_REMAP" "apple: no remap-skip (share passes host uids; uses HOST_UID remap like docker)"
 ba="$(rt_build_cmd vertex claude-vertex:latest /ctx)"
 assert_contains "$ba" "container build" "apple: build uses container"
 assert_contains "$ba" "-f /ctx/Containerfile" "apple: build -f Containerfile"

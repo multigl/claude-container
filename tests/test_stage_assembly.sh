@@ -24,7 +24,10 @@ done
 exit 0
 STUB
     chmod +x "$bin/docker"
-    env -i HOME="$home" PATH="$bin:$PATH" REC="$rec" CLAUDE_FLAVOR=vertex \
+    # Force docker so the recording stub (not a real runtime like Apple
+    # `container`, if installed on the host) captures the run argv + staged dir.
+    env -i HOME="$home" PATH="$bin:$PATH" REC="$rec" \
+        CLAUDE_FLAVOR=vertex CLAUDE_RUNTIME=docker \
         bash "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
     rm -rf "$bin"
     printf '%s' "$rec"
