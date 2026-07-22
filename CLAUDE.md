@@ -31,11 +31,61 @@ seed, the non-root `claude` user, the entrypoint). Build a flavor with
 symlinked to `claude-vertex` / `claude-gateway` and picks its flavor from the name
 it was invoked as (override with `CLAUDE_FLAVOR=...`).
 
+## Container runtime
+
+The image runs under one of three container runtimes, chosen by a dispatcher —
+`bin/container-runtime.sh` — that sources one driver from
+`bin/runtimes/{docker,podman,apple}.sh`. Both `bin/claude-launcher.sh` and the
+`just` build recipes route container ops through it (`container-runtime.sh
+--resolve` / `build …`), so there is one detection path.
+
+- **Priority: apple > docker > podman.** "Available" = installed **and** functional:
+  `docker info` / `podman info` succeed; apple = eligible host (Apple Silicon,
+  macOS 26+) **and** `container system status` succeeds. Platform gating: Linux
+  considers {docker, podman}; macOS considers {apple, docker, podman}.
+- **Override:** `CLAUDE_RUNTIME=docker|podman|apple` (errors if that runtime isn't
+  available). Debug: `claude-<flavor> --print-runtime` prints the resolved runtime +
+  per-runtime availability; `--print-paths` now includes a `RUNTIME=` line.
+- **docker** (rootful Linux / Docker Desktop): unchanged — HOST_UID/HOST_GID remap
+  in the entrypoint.
+- **podman** (rootless Linux): passes `--userns=keep-id:uid=1000,gid=1000` to map
+  the host user onto the image's `claude` (uid 1000), plus an internal
+  `_CLAUDE_UID_REMAP=skip` so the entrypoint skips its usermod/chown remap. On
+  SELinux-enforcing hosts it adds `--security-opt label=disable` (chosen over
+  per-mount `:z` relabeling, which would relabel shared host dirs like `~/.claude`).
+  `_CLAUDE_UID_REMAP` is internal — per-run `-e` only, never in the env file.
+- **apple `container`** (macOS 26+ on Apple Silicon only; v1.1.0, stable): bind-mount
+  ownership is translated by its VM file share (like Docker Desktop), so the
+  entrypoint remap is a no-op (no userns flag, no remap-skip signal).
+
+`just doctor` has a `== runtime ==` section (resolved runtime + availability).
+`just build`/`build-vertex`/`build-gateway`/`update` route through the dispatcher;
+`rebuild-*` remain docker-specific (the dispatcher build has no `--no-cache` flag
+yet — a known minor gap).
+
+### Installer (`install.sh`)
+
+`curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash`.
+Detects OS/arch, resolves a runtime, applies a macOS **apple gate** (on an
+Apple-Silicon macOS 26+ host without Apple `container` installed it stops and tells
+you to install it + re-run; skip with `--no-apple-gate` or
+`CLAUDE_SKIP_APPLE_GATE=1`; ineligible hosts fall through to docker/podman), clones
+the repo, builds the image(s) via the dispatcher, and symlinks `claude-<flavor>`
+into `~/.local/bin`. Flags: `--local` (skip clone; used by `just install`), `--all`,
+`--flavor`, `--runtime`, `--no-apple-gate`, `--prefix`, `--bin-dir`, `--ref`,
+`--dry-run`. `just install` = `install.sh --local --flavor <flavor>`;
+`just install-all` = `install.sh --local --all`.
+
 ## Key files
 
 - `Containerfile` — multi-stage build (`base`, `vertex`, `gateway`).
-- `bin/claude-launcher.sh` — host wrapper; assembles the `docker run` (mounts, env,
-  auth volumes) and dispatches subcommands (`auth`, `shell`, `reseed`, `--`).
+- `bin/container-runtime.sh` — runtime dispatcher; detects a runtime (apple >
+  docker > podman) + sources one driver from `bin/runtimes/`. See "Container runtime".
+- `bin/runtimes/{docker,podman,apple}.sh` — per-runtime drivers (run/build flags).
+- `install.sh` — `curl … | bash` installer (also backs `just install`); see below.
+- `bin/claude-launcher.sh` — host wrapper; resolves the runtime, assembles the
+  `<runtime> run` (mounts, env, cred bind dirs) and dispatches subcommands (`auth`,
+  `shell`, `reseed`, `migrate-creds`, `--`).
 - `bin/docker-entrypoint.sh` — runs as root to chown bind mounts + remap `claude` to
   the host UID/GID, seeds `~/.claude`, grafts MCP config/creds, then drops to
   `claude` via `gosu`.
@@ -109,8 +159,8 @@ on the `us` multi-region, haiku on `us-east5`. Pinning is load-bearing — unpin
 the Vertex small/fast model defaults to `claude-sonnet-4-5` (429s if unprovisioned;
 powers background titles + web-search summarization) and the 1M window is lost
 (`[1m]` suffix; Sonnet 5 is always 1M). Existing installs hand-add these to the
-live env file — `reseed` won't rewrite it. Env is read once at `docker run`, so an
-edit needs a session kill+reopen.
+live env file — `reseed` won't rewrite it. Env is read once at container start, so
+an edit needs a session kill+reopen.
 
 Host-side wrapper files live in an XDG split (namespace `vida-claude-container`):
 config the user hand-edits under `$XDG_CONFIG_HOME/vida-claude-container/<flavor>/`
@@ -159,10 +209,17 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
 - **Non-root.** Runs as `claude` (uid 1000) — Claude Code refuses
   `bypassPermissions` as root. The entrypoint remaps this user to the host's
   UID/GID so writes into mounts land with host ownership.
-- **Ephemeral (`docker run --rm`).** Nothing written to the container filesystem
+- **Ephemeral (`<runtime> run --rm`).** Nothing written to the container filesystem
   survives. Persistent state must live in the
   `~/.local/state/vida-claude-container/<flavor>/claude` bind mount, the host
-  `claude.json`/config `env` files, or a named docker volume (gcloud ADC, Okta cache).
+  `claude.json`/config `env` files, or the cred bind dirs (below).
+- **Credentials are host bind dirs, not named volumes.** Auth caches live under
+  XDG state: `$STATE_DIR/creds/gcloud` → `~/.config/gcloud` (vertex ADC) and
+  `$STATE_DIR/creds/okta` → `~/.local/share/litellm` (gateway Okta cache). No more
+  `docker volume` (works across all three runtimes). `just reset-auth` removes the
+  cred dir. Old installs that still have the pre-fix named volume can migrate it in
+  once with `claude-<flavor> migrate-creds` (copies the old volume into the new dir
+  via the resolved runtime; docker/podman only).
 - **claude-code is version-pinned; auto-update is OFF** (`DISABLE_AUTOUPDATER=1` in
   the `Containerfile` base). In-container self-update can't work — global npm install
   is root-owned but the process is non-root (EACCES), and `--rm` would discard it
