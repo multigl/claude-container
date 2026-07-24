@@ -11,10 +11,9 @@ default:
 build:
     {{here}}/bin/container-runtime.sh build --flavor {{flavor}} --image {{image}} --context {{here}}
 
-# Rebuild the {{flavor}} image without cache
-# TODO: rebuild-* still docker-specific (dispatcher build has no --no-cache flag yet)
+# Rebuild the {{flavor}} image without cache (via the resolved runtime)
 rebuild:
-    docker build -f {{here}}/Containerfile --no-cache --target {{flavor}} -t {{image}} {{here}}
+    {{here}}/bin/container-runtime.sh build --flavor {{flavor}} --image {{image}} --context {{here}} --no-cache
 
 # Update claude-code: rebuild {{flavor}} pinned to the latest published version.
 # The container's claude-code is deliberately non-self-updating (pinned + ephemeral
@@ -37,18 +36,18 @@ build-gateway:
 # Build both images (shared base layer is cached, so the second is cheap)
 build-all: build-vertex build-gateway
 
-# Rebuild the vertex image without cache
+# Rebuild the vertex image without cache (via the resolved runtime)
 rebuild-vertex:
-    docker build -f {{here}}/Containerfile --no-cache --target vertex -t claude-vertex:latest {{here}}
+    {{here}}/bin/container-runtime.sh build --flavor vertex --image claude-vertex:latest --context {{here}} --no-cache
 
-# Rebuild the gateway image without cache
+# Rebuild the gateway image without cache (via the resolved runtime)
 rebuild-gateway:
-    docker build -f {{here}}/Containerfile --no-cache --target gateway -t claude-gateway:latest {{here}}
+    {{here}}/bin/container-runtime.sh build --flavor gateway --image claude-gateway:latest --context {{here}} --no-cache
 
 # Rebuild both images from scratch (base built no-cache once, then reused)
 rebuild-all:
-    docker build -f {{here}}/Containerfile --no-cache --target vertex -t claude-vertex:latest {{here}}
-    docker build -f {{here}}/Containerfile --target gateway -t claude-gateway:latest {{here}}
+    {{here}}/bin/container-runtime.sh build --flavor vertex --image claude-vertex:latest --context {{here}} --no-cache
+    {{here}}/bin/container-runtime.sh build --flavor gateway --image claude-gateway:latest --context {{here}}
 
 # One-time login for {{flavor}} (gcloud ADC, or Okta device login) -> cred bind dir
 auth:

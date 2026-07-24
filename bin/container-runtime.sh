@@ -6,6 +6,7 @@
 # Standalone entrypoints (for tests + justfile + doctor):
 #   container-runtime.sh --resolve        # print chosen runtime or "none"
 #   container-runtime.sh build ARGS...    # build via the resolved driver
+#     --flavor F --image I [--context DIR] [--no-cache]
 # When sourced (CR_SOURCED=1), it defines functions and does not act.
 set -uo pipefail
 
@@ -73,6 +74,7 @@ if [[ "${CR_SOURCED:-0}" != 1 ]]; then
                 --flavor) flavor="$2"; shift 2 ;;
                 --image)  image="$2";  shift 2 ;;
                 --context) ctx="$2";   shift 2 ;;
+                --no-cache) export NO_CACHE=1; shift ;;
                 *) shift ;;
             esac; done
             rt="$(cr_resolve)"; [[ "$rt" == none ]] && { echo "no runtime" >&2; exit 1; }
@@ -81,6 +83,6 @@ if [[ "${CR_SOURCED:-0}" != 1 ]]; then
             echo ">> [$rt] $cmd"
             eval "$cmd"
             ;;
-        *) echo "usage: container-runtime.sh --resolve | build --flavor F --image I [--context DIR]" >&2; exit 2 ;;
+        *) echo "usage: container-runtime.sh --resolve | build --flavor F --image I [--context DIR] [--no-cache]" >&2; exit 2 ;;
     esac
 fi

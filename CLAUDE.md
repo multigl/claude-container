@@ -67,9 +67,13 @@ The image runs under one of three container runtimes, chosen by a dispatcher —
   (`--no-times --omit-dir-times`).
 
 `just doctor` has a `== runtime ==` section (resolved runtime + availability).
-`just build`/`build-vertex`/`build-gateway`/`update` route through the dispatcher;
-`rebuild-*` remain docker-specific (the dispatcher build has no `--no-cache` flag
-yet — a known minor gap).
+`just build`/`build-vertex`/`build-gateway`/`update`/`rebuild-*` all route through
+the dispatcher (`container-runtime.sh build ... --no-cache` for the `rebuild-*`
+variants) — no recipe hardcodes a runtime binary. (Previously the four `rebuild-*`
+recipes hardcoded `docker build`, silently writing to the wrong runtime's image
+store on multi-runtime hosts where a lower-priority runtime like docker was also
+installed; fixed by threading `NO_CACHE` through the dispatcher the same way
+`CLAUDE_CODE_VERSION` already was.)
 
 ### Installer (`install.sh`)
 

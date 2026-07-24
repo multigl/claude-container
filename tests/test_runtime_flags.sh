@@ -88,4 +88,20 @@ assert_contains "$bc" "--build-arg CLAUDE_CODE_VERSION=9.9.9" "docker: build arg
 bc2="$(bash -c 'source '"$CRDIR"'/container-runtime.sh; source '"$CRDIR"'/runtimes/docker.sh; rt_build_cmd vertex img /ctx')"
 assert_not_contains "$bc2" "build-arg" "docker: no build arg when CLAUDE_CODE_VERSION unset"
 
+# --no-cache forwarding (NO_CACHE env), all three drivers -------------------
+ncd="$(NO_CACHE=1 bash -c 'source '"$CRDIR"'/container-runtime.sh; source '"$CRDIR"'/runtimes/docker.sh; rt_build_cmd vertex img /ctx')"
+assert_contains "$ncd" "--no-cache" "docker: --no-cache forwarded when NO_CACHE set"
+ncd2="$(bash -c 'source '"$CRDIR"'/container-runtime.sh; source '"$CRDIR"'/runtimes/docker.sh; rt_build_cmd vertex img /ctx')"
+assert_not_contains "$ncd2" "--no-cache" "docker: no --no-cache when NO_CACHE unset"
+
+ncp="$(NO_CACHE=1 bash -c 'source '"$CRDIR"'/container-runtime.sh; source '"$CRDIR"'/runtimes/podman.sh; rt_build_cmd vertex img /ctx')"
+assert_contains "$ncp" "--no-cache" "podman: --no-cache forwarded when NO_CACHE set"
+ncp2="$(bash -c 'source '"$CRDIR"'/container-runtime.sh; source '"$CRDIR"'/runtimes/podman.sh; rt_build_cmd vertex img /ctx')"
+assert_not_contains "$ncp2" "--no-cache" "podman: no --no-cache when NO_CACHE unset"
+
+nca="$(NO_CACHE=1 bash -c 'source '"$CRDIR"'/container-runtime.sh; source '"$CRDIR"'/runtimes/apple.sh; rt_build_cmd vertex img /ctx')"
+assert_contains "$nca" "--no-cache" "apple: --no-cache forwarded when NO_CACHE set"
+nca2="$(bash -c 'source '"$CRDIR"'/container-runtime.sh; source '"$CRDIR"'/runtimes/apple.sh; rt_build_cmd vertex img /ctx')"
+assert_not_contains "$nca2" "--no-cache" "apple: no --no-cache when NO_CACHE unset"
+
 finish

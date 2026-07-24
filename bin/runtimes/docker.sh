@@ -22,9 +22,10 @@ rt_ssh_flags() {
 
 # Echo the build command (as a string; caller evals or prints).
 rt_build_cmd() {  # rt_build_cmd <flavor> <image> <context>
-    local ba=""
+    local ba="" nc=""
     [[ -n "${CLAUDE_CODE_VERSION:-}" ]] && ba=" --build-arg CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}"
-    printf 'docker build -f %q/Containerfile --target %q -t %q%s %q\n' "$3" "$1" "$2" "$ba" "$3"
+    [[ -n "${NO_CACHE:-}" ]] && nc=" --no-cache"
+    printf 'docker build -f %q/Containerfile --target %q -t %q%s%s %q\n' "$3" "$1" "$2" "$nc" "$ba" "$3"
 }
 
 # Run the container: bin + --rm + caller flags + image + args.
