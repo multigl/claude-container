@@ -68,6 +68,24 @@ cr_sync_mcp_servers() {  # cr_sync_mcp_servers <container_json> <seed_json>
     jq -s '.[0] * {mcpServers: .[1].mcpServers}' "$1" "$2"
 }
 
+# Compose the container ~/.gitconfig: inline the launcher-staged identity once
+# (only if it looks like a [user] stanza; tolerate a stale/empty/absent read),
+# then the static [safe]/[init] blocks. Emits the full gitconfig on stdout.
+# Unit-tested by tests/test_entrypoint_lib.sh.
+cr_render_gitconfig() {  # cr_render_gitconfig <identity_file>
+    local _identity
+    _identity="$(cat "$1" 2>/dev/null || true)"
+    if [[ "$_identity" == *"[user]"* ]]; then
+        printf '%s\n\n' "$_identity"
+    fi
+    cat <<'EOF'
+[safe]
+    directory = *
+[init]
+    defaultBranch = main
+EOF
+}
+
 # When sourced as a library (tests), define functions then stop before any
 # container-only boot logic. Harmless when executed normally (var is unset).
 [[ "${CLAUDE_ENTRYPOINT_LIB:-}" == 1 ]] && return 0
@@ -312,21 +330,7 @@ fi
 # it exactly once, here, so any read failure can't poison later git ops.
 GITCONFIG=/home/claude/.gitconfig
 IDENTITY=/opt/claude-stage/gitconfig-identity
-{
-    # Read the seed once. On stale-mount failure / empty / partial read, skip
-    # identity (non-fatal) rather than embed garbage; validate it looks like a
-    # [user] block before trusting it. The seed is already a [user] stanza.
-    _identity="$(cat "$IDENTITY" 2>/dev/null || true)"
-    if [[ "$_identity" == *"[user]"* ]]; then
-        printf '%s\n\n' "$_identity"
-    fi
-    cat <<'EOF'
-[safe]
-    directory = *
-[init]
-    defaultBranch = main
-EOF
-} > "$GITCONFIG"
+cr_render_gitconfig "$IDENTITY" > "$GITCONFIG"
 chown claude:claude "$GITCONFIG"
 
 # Register gh as the HTTPS credential helper when a token was injected (GH_TOKEN

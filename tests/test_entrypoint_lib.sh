@@ -42,4 +42,22 @@ assert_eq "/seed" "$(jq -r '.mcpServers.a.command' <<<"$out")" "sync: seed wins 
 assert_eq "/newb" "$(jq -r '.mcpServers.b.command' <<<"$out")" "sync: seed-only server added"
 assert_eq "true"  "$(jq -r '.trust'                <<<"$out")" "sync: container top-level keys preserved"
 
+# --- cr_render_gitconfig -----------------------------------------------------
+# Valid [user] identity is included ahead of the static blocks; an invalid or
+# missing identity file yields only the static blocks (never garbage).
+printf '[user]\n\tname = Ada\n\temail = ada@x.dev\n' > "$work/id.ok"
+out="$(cr_render_gitconfig "$work/id.ok")"
+assert_contains "$out" "name = Ada"           "gitconfig: valid identity included"
+assert_contains "$out" "directory = *"        "gitconfig: static [safe] present"
+assert_contains "$out" "defaultBranch = main" "gitconfig: static [init] present"
+
+printf 'this is not a user block\n' > "$work/id.bad"
+out="$(cr_render_gitconfig "$work/id.bad")"
+assert_not_contains "$out" "this is not a user block" "gitconfig: garbage identity dropped"
+assert_contains     "$out" "directory = *"            "gitconfig: static blocks still emitted"
+
+out="$(cr_render_gitconfig "$work/does-not-exist")"
+assert_not_contains "$out" "[user]"            "gitconfig: missing file -> no [user]"
+assert_contains     "$out" "defaultBranch = main" "gitconfig: missing file -> static blocks"
+
 finish
