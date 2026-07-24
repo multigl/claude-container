@@ -16,21 +16,6 @@ own `claude`, gcloud, and shell config. Two **flavors** build from one repo:
 The host's regular `claude` (public Anthropic API) is never touched; each flavor
 keeps its own state under `~/.local/state/vida-claude-container/<flavor>/claude/`.
 
-## Architecture
-
-Multi-stage `Containerfile`:
-
-```
-base ─┬─► vertex    (adds google-cloud-cli + Vertex ENV)
-      └─► gateway   (adds ANTHROPIC_BASE_URL + Okta apiKeyHelper, no gcloud)
-```
-
-`base` holds everything shared (node, claude-code, uv + mcp-atlassian, the plugin
-seed, the non-root `claude` user, the entrypoint). Build a flavor with
-`docker build --target <flavor>`. The host wrapper `bin/claude-launcher.sh` is
-symlinked to `claude-vertex` / `claude-gateway` and picks its flavor from the name
-it was invoked as (override with `CLAUDE_FLAVOR=...`).
-
 ## Container runtime
 
 The image runs under one of three container runtimes, chosen by a dispatcher —
@@ -87,47 +72,6 @@ into `~/.local/bin`. Flags: `--local` (skip clone; used by `just install`), `--a
 `--flavor`, `--runtime`, `--no-apple-gate`, `--prefix`, `--bin-dir`, `--ref`,
 `--dry-run`. `just install` = `install.sh --local --flavor <flavor>`;
 `just install-all` = `install.sh --local --all`.
-
-## Key files
-
-- `Containerfile` — multi-stage build (`base`, `vertex`, `gateway`).
-- `bin/container-runtime.sh` — runtime dispatcher; detects a runtime (apple >
-  docker > podman) + sources one driver from `bin/runtimes/`. See "Container runtime".
-- `bin/runtimes/{docker,podman,apple}.sh` — per-runtime drivers (run/build flags).
-- `install.sh` — `curl … | bash` installer (also backs `just install`); see below.
-- `bin/claude-launcher.sh` — host wrapper; resolves the runtime, assembles the
-  `<runtime> run` (mounts, env, cred bind dirs) and dispatches subcommands (`auth`,
-  `shell`, `reseed`, `migrate-creds`, `--`).
-- `bin/docker-entrypoint.sh` — runs as root to chown bind mounts + remap `claude` to
-  the host UID/GID, seeds `~/.claude`, grafts MCP config/creds, then drops to
-  `claude` via `gosu`.
-- `bin/statusline.sh` — default statusline (baked at `/opt/claude/statusline.sh`;
-  a host `~/.claude/statusline-command.sh` overrides it via the per-run stage dir,
-  copied over the default at boot — see "Stage directory").
-- `justfile` — build / install / auth / run / doctor / **update** recipes.
-- `seed-common/` — flavor-neutral seed payload (incl. `dotclaude.json` with the
-  atlassian + context7 `mcpServers`); overlaid per flavor by `seed-{vertex,gateway}/`.
-- `seed-{vertex,gateway}/settings.json` — flavor `settings.json` (plugins, theme,
-  statusline; gateway also sets `apiKeyHelper`).
-- `gateway/okta_token_helper.py` — the gateway `apiKeyHelper` (Okta OIDC id_token);
-  tested by `tests/test_okta_token_helper.py`.
-
-## Common workflows
-
-`just` recipes default to `FLAVOR=vertex`; prefix `FLAVOR=gateway` to target the
-gateway flavor.
-
-- `just build` / `build-vertex` / `build-gateway` / `build-all` — build image(s).
-- `just rebuild[-*]` — no-cache rebuild.
-- `just update` — **rebuild pinned to the latest published claude-code** (see below).
-- `just install-all` — symlink `claude-vertex` + `claude-gateway` onto PATH.
-- `just auth` — one-time login (vertex: gcloud ADC; `FLAVOR=gateway just auth`:
-  Okta device login).
-- `just run` / `shell` / `reseed` / `doctor` — run claude / bash / re-seed config /
-  self-check.
-- `just test` — runs `uv run pytest -q` (the gateway Okta helper) **and** the
-  plain-bash suites in `tests/` (`test_merge_settings.sh`, `test_launcher_paths.sh`,
-  via `tests/run.sh`). No Docker required.
 
 ## How config seeding works
 
