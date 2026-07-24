@@ -254,6 +254,34 @@ def test_serve_mismatched_issuer_forces_relogin(cache, configured, monkeypatch):
     assert helper.serve_or_refresh() is None
 
 
+def test_serve_partial_identity_missing_issuer_forces_relogin(cache, configured, monkeypatch):
+    token = make_jwt(exp=int(time.time()) + 1000)
+    cache.parent.mkdir(parents=True)
+    # client_id present, issuer absent -> _identity_matches' AND short-circuits to mismatch.
+    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt",
+                                 "client_id": "client-123"}))
+
+    def forbidden(*a, **k):
+        raise AssertionError("partial-identity cache must not attempt a refresh")
+
+    monkeypatch.setattr(helper, "post_form", forbidden)
+    assert helper.serve_or_refresh() is None
+
+
+def test_serve_partial_identity_missing_client_id_forces_relogin(cache, configured, monkeypatch):
+    token = make_jwt(exp=int(time.time()) + 1000)
+    cache.parent.mkdir(parents=True)
+    # issuer present, client_id absent -> still a mismatch.
+    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt",
+                                 "issuer": "https://vida.okta.com"}))
+
+    def forbidden(*a, **k):
+        raise AssertionError("partial-identity cache must not attempt a refresh")
+
+    monkeypatch.setattr(helper, "post_form", forbidden)
+    assert helper.serve_or_refresh() is None
+
+
 def test_serve_legacy_cache_without_identity_forces_relogin(cache, configured, monkeypatch):
     token = make_jwt(exp=int(time.time()) + 1000)
     cache.parent.mkdir(parents=True)
