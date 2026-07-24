@@ -18,6 +18,22 @@ cr_should_remap() {  # cr_should_remap <current_claude_uid>
     [[ "${HOST_UID}" != "$1" ]]
 }
 
+# Minimal stderr logger shared by the extracted boot functions below.
+cr_warn() { printf 'container-entrypoint: %s\n' "$*" >&2; }
+
+# Remap the claude user to the host UID/GID, non-fatally. Wraps the decision
+# (cr_should_remap) and the action so a usermod failure (e.g. HOST_UID already
+# baked into the image) degrades to a warning instead of aborting the entrypoint
+# under set -e. On skip the session simply runs as uid 1000.
+# Unit-tested by tests/test_entrypoint_remap.sh (override usermod/groupmod).
+cr_remap_user() {  # cr_remap_user <current_claude_uid>
+    cr_should_remap "$1" || return 0
+    groupmod -g "${HOST_GID:-$HOST_UID}" claude 2>/dev/null || true
+    usermod -u "$HOST_UID" -g "${HOST_GID:-$HOST_UID}" claude 2>/dev/null \
+        || cr_warn "remap to uid ${HOST_UID} failed (already in use?); continuing as uid 1000"
+    return 0
+}
+
 # When sourced as a library (tests), define functions then stop before any
 # container-only boot logic. Harmless when executed normally (var is unset).
 [[ "${CLAUDE_ENTRYPOINT_LIB:-}" == 1 ]] && return 0
@@ -43,10 +59,7 @@ export HOME=/home/claude
 # them in. Lets writes into the $PWD bind-mount land with host ownership
 # on Linux engines (macOS Docker translates implicitly, so this is a no-op
 # there). Build-time UID is just a placeholder.
-if cr_should_remap "$(id -u claude)"; then
-    groupmod -g "${HOST_GID:-$HOST_UID}" claude 2>/dev/null || true
-    usermod -u "$HOST_UID" -g "${HOST_GID:-$HOST_UID}" claude
-fi
+cr_remap_user "$(id -u claude)"
 
 mkdir -p "$DEST"
 [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && mkdir -p "$GCLOUD_DIR"
