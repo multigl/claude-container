@@ -118,6 +118,27 @@ _ssh_forward_enabled() {
     _is_truthy "$(_conf_get forward_ssh "$HOST_LAUNCHER_CONF")"
 }
 
+# Warn about unrecognized keys in launcher.conf. _conf_get's exact-match lookup
+# silently no-ops on a typo -- most likely the env-var spelling (CLAUDE_FORWARD_SSH)
+# used where the ini key (forward_ssh) belongs, since the sibling `env` file uses
+# ALL_CAPS keys and it's an easy mix-up. Without this, forwarding just silently
+# never turns on and there's no signal pointing at the config file as the cause.
+_KNOWN_LAUNCHER_CONF_KEYS=" forward_ssh "
+_conf_warn_unknown_keys() {  # _conf_warn_unknown_keys FILE
+    local file="$1" line k
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        [[ "$line" == *=* ]] || continue
+        k="${line%%=*}"
+        k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
+        [[ -z "$k" ]] && continue
+        if [[ "$_KNOWN_LAUNCHER_CONF_KEYS" != *" $k "* ]]; then
+            echo ">> launcher.conf: unrecognized key '$k' (known keys: forward_ssh); ignored" >&2
+        fi
+    done < "$file"
+}
+
 # Is forwarding supported on this runtime+OS combo? apple (any mac), or Linux with
 # docker/podman. NOT macOS Docker Desktop (the host-services bridge can't forward
 # the 1Password agent). _cr_is_linux comes from the sourced container-runtime.sh.
@@ -405,6 +426,7 @@ run_in_container() {
     # SSH agent forwarding (opt-in). Toggle via CLAUDE_FORWARD_SSH env or the
     # launcher.conf `forward_ssh` key; only wired on supported combos. Driver
     # decides the flags (rt_ssh_flags); driver already loaded above (cr_load_driver).
+    _conf_warn_unknown_keys "$HOST_LAUNCHER_CONF"
     local ssh_flags=()
     if _ssh_forward_enabled; then
         if _ssh_combo_supported; then

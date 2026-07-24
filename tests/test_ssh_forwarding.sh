@@ -72,6 +72,15 @@ argv="$(run_ssh Linux docker "$h" SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_contains "$argv" "/tmp/a.sock:/ssh-agent" "conf forward_ssh=true: socket bound"
 rm -rf "$h"
 
+# --- launcher.conf uses the env-var-style name instead of the ini key ->
+# --- stays off (no accidental enable) AND warns, instead of silently no-op'ing ---
+h="$(mktemp -d)"; cfg="$h/.config/vida-claude-container/vertex"; mkdir -p "$cfg"
+printf 'CLAUDE_FORWARD_SSH=1\n' > "$cfg/launcher.conf"
+argv="$(run_ssh Linux docker "$h" SSH_AUTH_SOCK=/tmp/a.sock)"
+assert_not_contains "$argv" "/ssh-agent" "wrong conf key name: forwarding stays off"
+assert_contains "$argv" "unrecognized key 'CLAUDE_FORWARD_SSH'" "wrong conf key name: warns"
+rm -rf "$h"
+
 # --- env=0 overrides conf=true -> off ---
 h="$(mktemp -d)"; cfg="$h/.config/vida-claude-container/vertex"; mkdir -p "$cfg"
 printf 'forward_ssh = true\n' > "$cfg/launcher.conf"
