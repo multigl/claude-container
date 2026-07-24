@@ -196,7 +196,9 @@ if [[ -f "$HOST_DOTCLAUDE_RO" ]] && command -v jq >/dev/null 2>&1; then
 fi
 
 chown claude:claude "$DOTCLAUDE" 2>/dev/null || true
-chmod 0644 "$DOTCLAUDE" 2>/dev/null || true
+# 0600, not 0644: this file holds grafted MCP credentials (env/headers secrets);
+# only claude (session) and root (this entrypoint) ever need to touch it.
+chmod 0600 "$DOTCLAUDE" 2>/dev/null || true
 
 # --- memory: derived index + global tier surfacing --------------------------
 # The container always runs at /workspace, so Claude's per-project dir is always
