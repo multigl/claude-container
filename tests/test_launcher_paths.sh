@@ -26,7 +26,7 @@ assert_contains "$out" "CRED_GCLOUD_DIR=$home/.local/state/vida-claude-container
 assert_contains "$out" "HOST_SETTINGS=$home/.config/vida-claude-container/vertex/settings.override.json" "vertex override path"
 assert_contains "$out" "HOST_ENV_FILE=$home/.config/vida-claude-container/vertex/env"       "vertex env default"
 assert_contains "$out" "HOST_MOUNTS_FILE=$home/.config/vida-claude-container/vertex/mounts" "vertex mounts default"
-assert_contains "$out" "HOST_GITCONFIG=$home/.config/vida-claude-container/vertex/gitconfig" "vertex gitconfig default"
+assert_contains "$out" "HOST_LAUNCHER_CONF=$home/.config/vida-claude-container/vertex/launcher.conf" "vertex launcher.conf default"
 assert_contains "$out" "RUNTIME=" "print-paths includes RUNTIME"
 rm -rf "$home"
 
@@ -52,12 +52,11 @@ assert_contains "$out" "STATE_DIR=/x/state/vida-claude-container/vertex" "XDG_ST
 rm -rf "$home"
 
 # --- config override env vars redirect their target ---
-res="$(run_paths CLAUDE_FLAVOR=vertex CLAUDE_ENV_FILE=/tmp/my.env CLAUDE_SETTINGS=/tmp/my.json CLAUDE_MOUNTS_FILE=/tmp/my.mounts CLAUDE_GITCONFIG=/tmp/my.gitconfig)"
+res="$(run_paths CLAUDE_FLAVOR=vertex CLAUDE_ENV_FILE=/tmp/my.env CLAUDE_SETTINGS=/tmp/my.json CLAUDE_MOUNTS_FILE=/tmp/my.mounts)"
 home="$(head -1 <<<"$res")"; out="$(tail -n +2 <<<"$res")"
 assert_contains "$out" "HOST_ENV_FILE=/tmp/my.env"        "CLAUDE_ENV_FILE override honored"
 assert_contains "$out" "HOST_SETTINGS=/tmp/my.json"       "CLAUDE_SETTINGS override honored"
 assert_contains "$out" "HOST_MOUNTS_FILE=/tmp/my.mounts"  "CLAUDE_MOUNTS_FILE override honored"
-assert_contains "$out" "HOST_GITCONFIG=/tmp/my.gitconfig" "CLAUDE_GITCONFIG override honored"
 rm -rf "$home"
 
 # --- per-project key + dir (keyed on the launcher's $PWD) ---

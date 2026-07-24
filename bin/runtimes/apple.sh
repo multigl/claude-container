@@ -16,6 +16,14 @@ rt_bin() { printf 'container\n'; }
 
 rt_run_flags() { :; }
 
+# SSH agent forwarding: apple `container --ssh` bind-mounts the real host
+# $SSH_AUTH_SOCK through virtualization and sets SSH_AUTH_SOCK inside the guest,
+# so we only add the flag -- no -v/-e (apple manages the in-guest socket path).
+rt_ssh_flags() {
+    [[ -n "${SSH_AUTH_SOCK:-}" ]] || return 0
+    printf '%s\n' '--ssh'
+}
+
 rt_build_cmd() {  # rt_build_cmd <flavor> <image> <context>
     local ba=""
     [[ -n "${CLAUDE_CODE_VERSION:-}" ]] && ba=" --build-arg CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}"

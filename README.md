@@ -193,23 +193,32 @@ Shared by both flavors:
 
 The container uses your **host** git/GitHub setup — no second login.
 
-- **Identity.** On first launch the wrapper seeds
-  `~/.config/vida-claude-container/<flavor>/gitconfig`,
-  prefilled from your host `git config` (resolved in the repo dir, so folder-scoped
-  `includeIf` values are honored). Edit it freely; it persists. Delete it to
-  re-seed. It's mounted read-only and included by the container's generated
-  `~/.gitconfig`. (Your host `~/.gitconfig` is **not** mounted directly — its
-  `includeIf gitdir:` conditions and host-only paths don't apply in the container.)
+- **Git identity is resolved fresh each launch.** The wrapper reads your **host**
+  `user.name`/`user.email` (and SSH signing config) with `git -C "$PWD" config
+  --get` every launch, so `includeIf gitdir:` (personal-vs-work) picks the right
+  values for the current repo. The result is inlined into the container's
+  `~/.gitconfig` at boot. Nothing persists between launches; your host
+  `~/.gitconfig` is never mounted directly.
 - **`gh` + HTTPS push.** The wrapper resolves your GitHub token with
   `gh auth token` (works even when gh stores it in the OS keyring) and injects it
   as `GH_TOKEN`. `gh pr`/`gh api` work, and `gh` is registered as the HTTPS git
   credential helper so HTTPS `git push` works. Use HTTPS remotes.
-- **SSH agent forwarding / commit signing: not currently supported.** It was removed
-  pending a cross-platform (docker / podman / apple-container) bring-your-own-provider
-  redesign. Docker Desktop's `host-services` agent bridge does not forward the
-  1Password agent (Apple `container --ssh` does), so the old socket-mount approach was
-  dropped rather than shipped half-working. Push over HTTPS in the meantime; sign
-  commits on the host.
+- **SSH agent forwarding + commit signing (opt-in).** Turn it on per run with
+  `CLAUDE_FORWARD_SSH=1`, or persist it in
+  `~/.config/vida-claude-container/<flavor>/launcher.conf`:
+
+  ```ini
+  forward_ssh = true
+  ```
+
+  - **macOS:** requires apple `container` (uses `container run --ssh`, which
+    forwards your real agent incl. 1Password). Docker Desktop is **not** supported.
+  - **Linux:** works with docker (rootful) and podman (rootless); the host
+    `$SSH_AUTH_SOCK` is bind-mounted in.
+  - **Signing** is picked up from your host git config automatically when
+    `gpg.format = ssh` (openpgp/x509 are skipped with a warning). Your signing key
+    is used via the forwarded agent; no key files are mounted. GitHub host keys are
+    baked in so SSH `git push` works.
 
 ## File locations (XDG)
 
@@ -218,7 +227,7 @@ Wrapper files live in an XDG split under the `vida-claude-container` namespace:
     $XDG_CONFIG_HOME/vida-claude-container/<flavor>/   # you edit these; back them up
     ├── env                     # MCP creds / endpoints (chmod 600)
     ├── mounts                  # extra host dirs to expose (one host path per line; see CLAUDE.md for the format)
-    ├── gitconfig               # git identity used in the container (chmod 600)
+    ├── launcher.conf           # host-side launcher settings (e.g. forward_ssh)
     └── settings.override.json  # optional Claude settings deltas, e.g. {"model": "..."}
 
     $XDG_STATE_HOME/vida-claude-container/<flavor>/    # machine-managed; disposable
@@ -256,7 +265,6 @@ migration; move them by hand once (per flavor):
     mkdir -p "$cfg" "$state"
     mv ~/.claude-$flavor.env       "$cfg/env"        2>/dev/null || true
     mv ~/.claude-$flavor.mounts    "$cfg/mounts"     2>/dev/null || true
-    mv ~/.claude-$flavor.gitconfig "$cfg/gitconfig"  2>/dev/null || true
     mv ~/.claude-$flavor          "$state/claude"    2>/dev/null || true
     mkdir -p "$state/claude"
     mv ~/.claude-$flavor.json     "$state/claude/claude.json" 2>/dev/null || true

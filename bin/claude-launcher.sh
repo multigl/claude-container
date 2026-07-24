@@ -74,17 +74,118 @@ HOST_PROJECT_DIR="${STATE_DIR}/projects/${PROJECT_KEY}"
 CRED_GCLOUD_DIR="${STATE_DIR}/creds/gcloud"   # vertex: gcloud ADC
 CRED_OKTA_DIR="${STATE_DIR}/creds/okta"       # gateway: Okta token cache
 
-# Config: env / mounts / gitconfig / settings override. Each keeps an escape-hatch
+# Config: env / mounts / settings override. Each keeps an escape-hatch
 # override env var so it can be pointed into a dotfiles repo. (See README for the
 # mounts-file format and the settings.override.json semantics.)
 HOST_ENV_FILE="${CLAUDE_ENV_FILE:-${CFG_DIR}/env}"
 HOST_MOUNTS_FILE="${CLAUDE_MOUNTS_FILE:-${CFG_DIR}/mounts}"
-HOST_GITCONFIG="${CLAUDE_GITCONFIG:-${CFG_DIR}/gitconfig}"
 HOST_SETTINGS="${CLAUDE_SETTINGS:-${CFG_DIR}/settings.override.json}"
+# launcher.conf: host-side launcher settings (flat INI `key = value`, parsed not
+# sourced). First key: forward_ssh (SSH agent forwarding toggle). No escape-hatch
+# path override -- the per-run env override is CLAUDE_FORWARD_SSH.
+HOST_LAUNCHER_CONF="${CFG_DIR}/launcher.conf"
 
 # Resolve the container runtime (apple>docker>podman; CLAUDE_RUNTIME overrides).
 CR_SOURCED=1 source "$SCRIPT_DIR/container-runtime.sh"
 RUNTIME="$(cr_resolve)"
+
+# --- launcher.conf parsing + SSH-forward policy ------------------------------
+# Read one key from a flat INI file (strip # comments, trim, split on first =).
+# bash-3.2-safe; not sourced (never executes file contents). Prints the value.
+_conf_get() {  # _conf_get KEY FILE
+    local key="$1" file="$2" line k v
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        [[ "$line" == *=* ]] || continue
+        k="${line%%=*}"; v="${line#*=}"
+        k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
+        v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+        if [[ "$k" == "$key" ]]; then printf '%s' "$v"; return 0; fi
+    done < "$file"
+}
+
+# Truthy set per spec: 1 / true / yes (case-insensitive). Everything else false.
+_is_truthy() {
+    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes) return 0 ;; *) return 1 ;;
+    esac
+}
+
+# Should SSH be forwarded? Precedence: CLAUDE_FORWARD_SSH env > launcher.conf > off.
+_ssh_forward_enabled() {
+    if [[ -n "${CLAUDE_FORWARD_SSH:-}" ]]; then _is_truthy "$CLAUDE_FORWARD_SSH"; return; fi
+    _is_truthy "$(_conf_get forward_ssh "$HOST_LAUNCHER_CONF")"
+}
+
+# Is forwarding supported on this runtime+OS combo? apple (any mac), or Linux with
+# docker/podman. NOT macOS Docker Desktop (the host-services bridge can't forward
+# the 1Password agent). _cr_is_linux comes from the sourced container-runtime.sh.
+_ssh_combo_supported() {
+    [[ "$RUNTIME" == apple ]] && return 0
+    _cr_is_linux && { [[ "$RUNTIME" == docker || "$RUNTIME" == podman ]]; }
+}
+
+# Resolve git identity + SSH signing FRESH from the host $PWD (honoring includeIf
+# so personal-vs-work picks the right email/key) and emit a [user]/[gpg]/[commit]
+# block to stdout. Written into the per-run stage dir each launch, never persisted
+# -- the container always runs at /workspace, so a persisted identity would freeze
+# to the first repo. Only SSH signing is supported in-container.
+_stage_git_identity() {
+    local name email fmt key sign
+    name="$(git -C "$PWD" config --get user.name      2>/dev/null || true)"
+    email="$(git -C "$PWD" config --get user.email     2>/dev/null || true)"
+    fmt="$(git -C "$PWD" config --get gpg.format       2>/dev/null || true)"
+    key="$(git -C "$PWD" config --get user.signingkey  2>/dev/null || true)"
+    sign="$(git -C "$PWD" config --get --type=bool commit.gpgsign 2>/dev/null || true)"
+
+    printf '[user]\n'
+    [[ -n "$name" ]]  && printf '    name = %s\n'  "$name"
+    [[ -n "$email" ]] && printf '    email = %s\n' "$email"
+
+    # No signing key host-side -> identity only.
+    [[ -n "$key" ]] || return 0
+
+    # Only ssh signing works in-container (no gpg secret key; no x509/smime).
+    if [[ "$fmt" != "ssh" ]]; then
+        echo ">> host git uses ${fmt:-openpgp} signing; only ssh signing works in-container. Skipping signingkey graft (name/email still applied)." >&2
+        return 0
+    fi
+
+    # Resolve signingkey to a literal single-line ssh public key. Detect literals
+    # by algorithm prefix FIRST -- key bodies are base64 (contain '/'), so a path
+    # heuristic alone would misclassify a literal key as a file path.
+    local literal="$key" p
+    case "$key" in
+        ssh-*|ecdsa-*|sk-*|key::*) : ;;                 # literal pubkey; use verbatim
+        /*|"~"*|./*|*/*)                                # looks like a path; inline the file
+            p="$key"; [[ "$p" == "~"* ]] && p="${HOME}${p#\~}"
+            if [[ -r "$p" ]]; then
+                literal="$(cat "$p" 2>/dev/null || true)"
+            else
+                echo ">> user.signingkey '$key' is not a readable file; skipping signingkey graft." >&2
+                return 0
+            fi ;;
+        *) : ;;                                         # unknown shape; validated below
+    esac
+    # Final literal must be a single-line ssh public key (guards multiline files,
+    # accidental private-key paths, and garbage values -- which would emit an
+    # invalid ~/.gitconfig or copy a secret into the stage dir).
+    if [[ -z "$literal" || "$literal" == *$'\n'* ]] || \
+       { [[ "$literal" != ssh-* && "$literal" != ecdsa-* && "$literal" != sk-* && "$literal" != key::* ]]; }; then
+        echo ">> resolved signing key is not a single-line ssh public key; skipping signingkey graft." >&2
+        return 0
+    fi
+
+    # NEVER graft gpg.ssh.program: the host's 1Password op-ssh-sign path does not
+    # exist in the container. Omitting it makes git use the container's own
+    # `ssh-keygen -Y sign`, which signs via the forwarded agent.
+    local gpgsign=false
+    [[ "$sign" == true ]] && gpgsign=true
+    printf '    signingkey = %s\n' "$literal"
+    printf '[gpg]\n    format = ssh\n'
+    printf '[commit]\n    gpgsign = %s\n' "$gpgsign"
+}
 
 # --print-runtime: report the resolved runtime + availability, then exit (no side effects).
 if [[ "${1:-}" == "--print-runtime" ]]; then
@@ -111,8 +212,8 @@ CRED_GCLOUD_DIR=$CRED_GCLOUD_DIR
 CRED_OKTA_DIR=$CRED_OKTA_DIR
 HOST_ENV_FILE=$HOST_ENV_FILE
 HOST_MOUNTS_FILE=$HOST_MOUNTS_FILE
-HOST_GITCONFIG=$HOST_GITCONFIG
 HOST_SETTINGS=$HOST_SETTINGS
+HOST_LAUNCHER_CONF=$HOST_LAUNCHER_CONF
 IMAGE=$IMAGE
 RUNTIME=$RUNTIME
 EOF
@@ -185,22 +286,6 @@ EOF
     chmod 600 "$HOST_ENV_FILE"
 fi
 
-# Seed the git identity file once, prefilled from the host's effective identity
-# resolved in $PWD (so folder-scoped includeIf values are honored). Editable and
-# persistent thereafter; delete it to re-seed.
-if [[ ! -f "$HOST_GITCONFIG" ]]; then
-    _git_name="$(git -C "$PWD" config --get user.name  2>/dev/null || true)"
-    _git_email="$(git -C "$PWD" config --get user.email 2>/dev/null || true)"
-    cat > "$HOST_GITCONFIG" <<EOF
-# claude-${FLAVOR}: git identity used INSIDE the container. Prefilled from your
-# host git config; edit freely (persists across sessions; delete to re-seed).
-[user]
-    name = ${_git_name}
-    email = ${_git_email}
-EOF
-    chmod 600 "$HOST_GITCONFIG"
-fi
-
 # Ensure the flavor's credential directory exists (bind-mounted; see run_in_container).
 if [[ "$FLAVOR" == vertex ]]; then
     mkdir -p "$CRED_GCLOUD_DIR"
@@ -251,9 +336,9 @@ run_in_container() {
     if [[ -f "$HOME/.claude/statusline-command.sh" ]]; then
         cp "$HOME/.claude/statusline-command.sh" "$STAGE/statusline.sh"
     fi
-    if [[ -f "$HOST_GITCONFIG" ]]; then
-        cp "$HOST_GITCONFIG" "$STAGE/gitconfig-identity"
-    fi
+    # Git identity + SSH signing, resolved fresh from the host $PWD every launch
+    # (honors includeIf). Always written so the entrypoint has a file to inline.
+    _stage_git_identity > "$STAGE/gitconfig-identity"
     extra_flags+=(-v "$STAGE:/opt/claude-stage:ro")
     # GitHub token resolved from the host (gh stores it in the OS keyring by
     # default, so ~/.config/gh alone lacks it). Injected in-memory per run; never
@@ -317,7 +402,23 @@ run_in_container() {
     local rt_flags=()
     while IFS= read -r _f; do [[ -n "$_f" ]] && rt_flags+=("$_f"); done < <(rt_run_flags)
 
+    # SSH agent forwarding (opt-in). Toggle via CLAUDE_FORWARD_SSH env or the
+    # launcher.conf `forward_ssh` key; only wired on supported combos. Driver
+    # decides the flags (rt_ssh_flags); driver already loaded above (cr_load_driver).
+    local ssh_flags=()
+    if _ssh_forward_enabled; then
+        if _ssh_combo_supported; then
+            while IFS= read -r _f; do [[ -n "$_f" ]] && ssh_flags+=("$_f"); done < <(rt_ssh_flags)
+            if [[ ${#ssh_flags[@]} -eq 0 ]]; then
+                echo ">> SSH forwarding enabled but SSH_AUTH_SOCK is unset (no agent running?); skipping." >&2
+            fi
+        else
+            echo ">> SSH forwarding unsupported on $RUNTIME for this host; use apple \`container\` or push over HTTPS. Skipping." >&2
+        fi
+    fi
+
     rt_run --rm "${extra_flags[@]}" "${rt_flags[@]+"${rt_flags[@]}"}" \
+        "${ssh_flags[@]+"${ssh_flags[@]}"}" \
         --env-file "$HOST_ENV_FILE" \
         -e "HOST_UID=$(id -u)" \
         -e "HOST_GID=$(id -g)" \

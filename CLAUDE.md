@@ -172,13 +172,13 @@ an edit needs a session kill+reopen.
 
 Host-side wrapper files live in an XDG split (namespace `vida-claude-container`):
 config the user hand-edits under `$XDG_CONFIG_HOME/vida-claude-container/<flavor>/`
-(`env`, `mounts`, `gitconfig`, `settings.override.json`), and machine-managed state
+(`env`, `mounts`, `launcher.conf`, `settings.override.json`), and machine-managed state
 under `$XDG_STATE_HOME/vida-claude-container/<flavor>/` (`claude/` → the container's
 `~/.claude`, which now also holds `claude/claude.json` → the container's
 symlinked `~/.claude.json`). Defaults fall back to `~/.config` and
 `~/.local/state` when the XDG vars are unset. Only config files have escape-hatch
-env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_GITCONFIG`,
-`CLAUDE_SETTINGS`); state paths follow `XDG_STATE_HOME` only.
+env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_SETTINGS`);
+state paths follow `XDG_STATE_HOME` only.
 
 ### Memory scoping (per-project + global tier)
 
@@ -241,25 +241,33 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   **read-only** by default (append ` :rw` to a line to allow edits). They are then
   reachable by Claude's native Read/Write/Grep/Bash — no MCP needed, since the
   bind mount is itself the access boundary.
-- **Git identity is seeded, not inherited.** The launcher writes
-  `~/.config/vida-claude-container/<flavor>/gitconfig` (prefilled from host
-  `git config`), stages it as `gitconfig-identity` (see "Stage directory"), and the
-  entrypoint generates a writable `~/.gitconfig` that **inlines** it (reads the
-  staged file once at boot, not a live `[include]`). The host `~/.gitconfig` is not
-  mounted directly. Inlining is deliberate: a live `[include]` of a host file that
-  becomes unreadable (a stale single-file mount, non-ENOENT) makes git abort with
-  `bad config line N` — breaking every git call and the git-based statusline.
-  Reading once at boot confines that risk (and a failed read is non-fatal —
-  identity is skipped, git still works). This is also *why* single-file mounts were
-  eliminated in favor of the stage dir.
+- **Git identity is resolved fresh each launch, not seeded.** The launcher runs
+  `git -C "$PWD" config --get` on the **host** for `user.name`/`user.email` (and
+  the SSH signing config, below) every launch — so folder-scoped `includeIf`
+  (personal-vs-work) selects the right values for the repo you're actually in —
+  and writes the result into the per-run stage dir as `gitconfig-identity`. The
+  entrypoint inlines it once at boot into a container-owned `~/.gitconfig` (reads
+  it once, not a live `[include]`; see "Stage directory"). Nothing is persisted:
+  the container always runs at `/workspace`, so a persisted identity would freeze
+  to the first repo. There is no `gitconfig` config file and no `CLAUDE_GITCONFIG`
+  override anymore. Inlining (vs `[include]`) is still deliberate: a live include
+  of an unreadable file makes git abort with `bad config line N`, breaking every
+  git call and the git-based statusline.
 - **`gh` auth is a resolved token, not a mount.** The launcher injects
   `GH_TOKEN=$(gh auth token)` from the host (keyring-safe). The entrypoint runs
   `gh auth setup-git` for HTTPS push.
-- **SSH agent forwarding / commit signing is not wired.** It was removed pending a
-  cross-platform (docker/podman/apple-container) bring-your-own-provider redesign.
-  Push over HTTPS (`GH_TOKEN`) until then. Background: Docker Desktop's
-  `host-services` agent bridge does not forward the 1Password agent (Apple
-  `container --ssh` does) — the reason the socket-mount approach was dropped.
+- **SSH agent forwarding + SSH commit signing (opt-in).** Enable per run with
+  `CLAUDE_FORWARD_SSH=1`, or persist `forward_ssh = true` in
+  `~/.config/vida-claude-container/<flavor>/launcher.conf` (flat INI; env
+  overrides the file). Supported on **macOS + apple `container`** (uses
+  `container run --ssh`), **Linux + docker rootful**, and **Linux + podman
+  rootless** (both bind-mount `$SSH_AUTH_SOCK`). **macOS + Docker Desktop is
+  unsupported** — its `host-services` bridge can't forward the 1Password agent —
+  and the launcher warns + skips there. SSH signing config is grafted from the
+  host git config only when `gpg.format = ssh` (openpgp/x509 → alerted + skipped);
+  `gpg.ssh.program` is deliberately never grafted so the container's own
+  `ssh-keygen` signs via the forwarded agent. GitHub host keys are baked into the
+  image so SSH push works.
 - **Hadolint.** `GOOGLE_APPLICATION_CREDENTIALS` is exported at runtime by the
   entrypoint, not baked as `ENV`, to avoid the `SecretsUsedInArgOrEnv` warning on
   the `*_CREDENTIALS` name pattern.

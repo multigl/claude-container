@@ -61,6 +61,22 @@ chown claude:claude /home/claude 2>/dev/null || true
 chown -R claude:claude "$DEST" 2>/dev/null || true
 [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]] && { chown -R claude:claude "$GCLOUD_DIR" 2>/dev/null || true; }
 
+# Ensure ~/.ssh exists + claude-owned, for a forwarded agent socket and the baked
+# known_hosts. Best-effort chown (file-share runtimes reject chown; see above).
+mkdir -p /home/claude/.ssh && chmod 700 /home/claude/.ssh
+chown claude:claude /home/claude/.ssh 2>/dev/null || true
+
+# Apple `container --ssh` creates the in-guest forwarded agent socket root:root
+# 0600 (confirmed by host testing) -- AF_UNIX connect() requires WRITE permission
+# on the socket file, so the non-root claude user can't reach it as-is. Re-owning
+# it to claude (the only user that ever runs in this container) is more scoped
+# than world-writable perms. Best-effort + root-only, before the drop below.
+# Harmless no-op for docker/podman, where the bind-mounted host socket is already
+# claude-reachable after the uid remap.
+if [[ -n "${SSH_AUTH_SOCK:-}" && -S "$SSH_AUTH_SOCK" ]]; then
+    chown claude:claude "$SSH_AUTH_SOCK" 2>/dev/null || true
+fi
+
 # Persist ~/.claude.json inside the ~/.claude directory bind mount instead of via
 # a fragile single-file mount (those rot on Docker Desktop macOS across host
 # sleep/wake). The launcher stores it at $DEST/claude.json (inside the mounted
@@ -294,6 +310,10 @@ fi
 # -----------------------------------------------------------------------------
 
 exec_env=( HOME=/home/claude )
+# Preserve a forwarded SSH agent socket across the drop to claude (gosu env resets
+# the environment). Set by the docker/podman -e SSH_AUTH_SOCK=/ssh-agent flag or by
+# apple `container --ssh` in-guest. Absent when forwarding is off -> nothing added.
+[[ -n "${SSH_AUTH_SOCK:-}" ]] && exec_env+=( "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" )
 if [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]]; then
     exec_env+=( "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS" )
 fi

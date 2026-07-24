@@ -9,6 +9,17 @@ rt_bin() { printf 'docker\n'; }
 # docker; the launcher already passes -e HOST_UID/HOST_GID for the remap.
 rt_run_flags() { :; }
 
+# SSH agent forwarding: bind the host agent socket into the container and point
+# the in-container SSH_AUTH_SOCK at it. One token per line (like rt_run_flags).
+# Emitted only when the caller has enabled forwarding; empty socket -> nothing.
+rt_ssh_flags() {
+    [[ -n "${SSH_AUTH_SOCK:-}" ]] || return 0
+    printf '%s\n' '-v'
+    printf '%s\n' "${SSH_AUTH_SOCK}:/ssh-agent"
+    printf '%s\n' '-e'
+    printf '%s\n' 'SSH_AUTH_SOCK=/ssh-agent'
+}
+
 # Echo the build command (as a string; caller evals or prints).
 rt_build_cmd() {  # rt_build_cmd <flavor> <image> <context>
     local ba=""

@@ -25,6 +25,16 @@ rt_run_flags() {
     fi
 }
 
+# SSH agent forwarding: identical to docker. keep-id maps the host user onto
+# claude (uid 1000), so the bind-mounted host socket is claude-accessible.
+rt_ssh_flags() {
+    [[ -n "${SSH_AUTH_SOCK:-}" ]] || return 0
+    printf '%s\n' '-v'
+    printf '%s\n' "${SSH_AUTH_SOCK}:/ssh-agent"
+    printf '%s\n' '-e'
+    printf '%s\n' 'SSH_AUTH_SOCK=/ssh-agent'
+}
+
 rt_build_cmd() {  # rt_build_cmd <flavor> <image> <context>
     local ba=""
     [[ -n "${CLAUDE_CODE_VERSION:-}" ]] && ba=" --build-arg CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}"

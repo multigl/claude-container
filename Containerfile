@@ -41,6 +41,17 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# GitHub SSH host keys, for `git push` over SSH (an unknown host key would
+# otherwise abort the push non-interactively). Fetched from GitHub's published
+# meta API at build so they stay current, written to the system known_hosts
+# (world-readable; the non-root claude user reads it). To trust more hosts, add
+# them via ~/.ssh/known_hosts inside the ~/.claude state mount, or a mounts entry.
+RUN mkdir -p /etc/ssh \
+    && curl -fsSL https://api.github.com/meta \
+        | jq -r '.ssh_keys[] | "github.com " + .' > /etc/ssh/ssh_known_hosts \
+    && test -s /etc/ssh/ssh_known_hosts \
+    && chmod 0644 /etc/ssh/ssh_known_hosts
+
 # Pinned via build arg. Defaults to `latest` so a plain `just build` tracks the
 # newest release; `just update` resolves the current latest and passes it here so
 # the built image records an exact, reproducible version (and the changed arg
