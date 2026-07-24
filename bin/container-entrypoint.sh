@@ -86,6 +86,20 @@ cr_render_gitconfig() {  # cr_render_gitconfig <identity_file>
 EOF
 }
 
+# Assemble the environment that survives the gosu drop to claude (gosu env resets
+# the environment). Emits one KEY=VAL per line: always HOME; SSH_AUTH_SOCK when a
+# forwarded agent is present; GOOGLE_APPLICATION_CREDENTIALS on the vertex flavor.
+# No value contains a newline (paths only), so line-per-var is safe. Unit-tested
+# by test_entrypoint_ssh.sh.
+cr_build_exec_env() {
+    printf '%s\n' "HOME=/home/claude"
+    [[ -n "${SSH_AUTH_SOCK:-}" ]] && printf '%s\n' "SSH_AUTH_SOCK=$SSH_AUTH_SOCK"
+    if [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]]; then
+        printf '%s\n' "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS"
+    fi
+    return 0
+}
+
 # When sourced as a library (tests), define functions then stop before any
 # container-only boot logic. Harmless when executed normally (var is unset).
 [[ "${CLAUDE_ENTRYPOINT_LIB:-}" == 1 ]] && return 0
@@ -340,12 +354,9 @@ if [[ -n "${GH_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
 fi
 # -----------------------------------------------------------------------------
 
-exec_env=( HOME=/home/claude )
-# Preserve a forwarded SSH agent socket across the drop to claude (gosu env resets
-# the environment). Set by the docker/podman -e SSH_AUTH_SOCK=/ssh-agent flag or by
-# apple `container --ssh` in-guest. Absent when forwarding is off -> nothing added.
-[[ -n "${SSH_AUTH_SOCK:-}" ]] && exec_env+=( "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" )
-if [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]]; then
-    exec_env+=( "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS" )
-fi
+# Read cr_build_exec_env line by line into the array (kept bash-3.2-safe: no
+# mapfile). exec_env always has >=1 entry (HOME), so "${exec_env[@]}" is never an
+# empty expansion under set -u.
+exec_env=()
+while IFS= read -r _line; do exec_env+=( "$_line" ); done < <(cr_build_exec_env)
 exec gosu claude env "${exec_env[@]}" "$@"
