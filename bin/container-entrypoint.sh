@@ -34,6 +34,33 @@ cr_remap_user() {  # cr_remap_user <current_claude_uid>
     return 0
 }
 
+# Deep-merge the host's env/headers sub-blocks (MCP credentials) into the
+# container's mcpServers entries that already exist; host wins on conflict;
+# host-only servers are ignored; command paths stay the container's. Pure jq
+# transform, emits merged JSON on stdout. Unit-tested by test_entrypoint_lib.sh.
+cr_graft_mcp_creds() {  # cr_graft_mcp_creds <container_json> <host_json>
+    jq -s '
+      .[0] as $c | .[1] as $h |
+      $c * {
+        mcpServers: (
+          $c.mcpServers
+          | with_entries(
+              .key as $name | .value as $srv
+              | .value = (
+                  $srv
+                  + (if $h.mcpServers[$name].env
+                     then {env: ((($srv.env // {}) + $h.mcpServers[$name].env))}
+                     else {} end)
+                  + (if $h.mcpServers[$name].headers
+                     then {headers: ((($srv.headers // {}) + $h.mcpServers[$name].headers))}
+                     else {} end)
+                )
+            )
+        )
+      }
+    ' "$1" "$2"
+}
+
 # When sourced as a library (tests), define functions then stop before any
 # container-only boot logic. Harmless when executed normally (var is unset).
 [[ "${CLAUDE_ENTRYPOINT_LIB:-}" == 1 ]] && return 0
@@ -181,28 +208,7 @@ HOST_DOTCLAUDE_RO=/opt/claude-stage/host-claude.json
 if [[ -f "$HOST_DOTCLAUDE_RO" ]] && command -v jq >/dev/null 2>&1; then
     if jq -e '.mcpServers' "$HOST_DOTCLAUDE_RO" >/dev/null 2>&1; then
         tmp="$(mktemp)"
-        # For each server name present in BOTH files, deep-merge host's
-        # env/headers into container's entry (host values win on conflict).
-        jq -s '
-          .[0] as $c | .[1] as $h |
-          $c * {
-            mcpServers: (
-              $c.mcpServers
-              | with_entries(
-                  .key as $name | .value as $srv
-                  | .value = (
-                      $srv
-                      + (if $h.mcpServers[$name].env
-                         then {env: ((($srv.env // {}) + $h.mcpServers[$name].env))}
-                         else {} end)
-                      + (if $h.mcpServers[$name].headers
-                         then {headers: ((($srv.headers // {}) + $h.mcpServers[$name].headers))}
-                         else {} end)
-                    )
-                )
-            )
-          }
-        ' "$DOTCLAUDE" "$HOST_DOTCLAUDE_RO" > "$tmp" \
+        cr_graft_mcp_creds "$DOTCLAUDE" "$HOST_DOTCLAUDE_RO" > "$tmp" \
             && cat "$tmp" > "$DOTCLAUDE"
         rm -f "$tmp"
     fi
