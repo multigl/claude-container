@@ -61,6 +61,13 @@ cr_graft_mcp_creds() {  # cr_graft_mcp_creds <container_json> <host_json>
     ' "$1" "$2"
 }
 
+# Force the seed's mcpServers skeleton into the container config (deep-merge, seed
+# wins) so an older host claude.json can't leave the block missing. Pure jq,
+# emits merged JSON on stdout. Unit-tested by tests/test_entrypoint_lib.sh.
+cr_sync_mcp_servers() {  # cr_sync_mcp_servers <container_json> <seed_json>
+    jq -s '.[0] * {mcpServers: .[1].mcpServers}' "$1" "$2"
+}
+
 # When sourced as a library (tests), define functions then stop before any
 # container-only boot logic. Harmless when executed normally (var is unset).
 [[ "${CLAUDE_ENTRYPOINT_LIB:-}" == 1 ]] && return 0
@@ -189,8 +196,7 @@ fi
 # from a prior run could be missing the mcpServers skeleton entirely.
 if [[ -f "$SEED/dotclaude.json" ]] && command -v jq >/dev/null 2>&1; then
     tmp="$(mktemp)"
-    jq -s '.[0] * {mcpServers: .[1].mcpServers}' \
-        "$DOTCLAUDE" "$SEED/dotclaude.json" > "$tmp" \
+    cr_sync_mcp_servers "$DOTCLAUDE" "$SEED/dotclaude.json" > "$tmp" \
         && cat "$tmp" > "$DOTCLAUDE"
     rm -f "$tmp"
 fi

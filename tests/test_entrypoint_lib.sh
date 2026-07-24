@@ -28,4 +28,18 @@ assert_eq "v"       "$(jq -r '.mcpServers.jira.headers.H' <<<"$out")" "graft: ho
 assert_eq "null"    "$(jq -r '.mcpServers.extra'          <<<"$out")" "graft: host-only server ignored"
 assert_eq "true"    "$(jq -r '.trust'                     <<<"$out")" "graft: top-level container keys preserved"
 
+# --- cr_sync_mcp_servers -----------------------------------------------------
+# Deep-merge (jq *) the seed's mcpServers over the container's: seed keys win on
+# conflict and seed-only servers are added; unrelated top-level container keys stay.
+cat > "$work/c2.json" <<'JSON'
+{"trust":true,"mcpServers":{"a":{"command":"/old"}}}
+JSON
+cat > "$work/seed.json" <<'JSON'
+{"mcpServers":{"a":{"command":"/seed"},"b":{"command":"/newb"}}}
+JSON
+out="$(cr_sync_mcp_servers "$work/c2.json" "$work/seed.json")"
+assert_eq "/seed" "$(jq -r '.mcpServers.a.command' <<<"$out")" "sync: seed wins on shared server"
+assert_eq "/newb" "$(jq -r '.mcpServers.b.command' <<<"$out")" "sync: seed-only server added"
+assert_eq "true"  "$(jq -r '.trust'                <<<"$out")" "sync: container top-level keys preserved"
+
 finish
