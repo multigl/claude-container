@@ -37,7 +37,7 @@ cr_remap_user() {  # cr_remap_user <current_claude_uid>
 # Deep-merge the host's env/headers sub-blocks (MCP credentials) into the
 # container's mcpServers entries that already exist; host wins on conflict;
 # host-only servers are ignored; command paths stay the container's. Pure jq
-# transform, emits merged JSON on stdout. Unit-tested by test_entrypoint_lib.sh.
+# transform, emits merged JSON on stdout. Unit-tested by tests/test_entrypoint_lib.sh.
 cr_graft_mcp_creds() {  # cr_graft_mcp_creds <container_json> <host_json>
     jq -s '
       .[0] as $c | .[1] as $h |
@@ -90,7 +90,7 @@ EOF
 # the environment). Emits one KEY=VAL per line: always HOME; SSH_AUTH_SOCK when a
 # forwarded agent is present; GOOGLE_APPLICATION_CREDENTIALS on the vertex flavor.
 # No value contains a newline (paths only), so line-per-var is safe. Unit-tested
-# by test_entrypoint_ssh.sh.
+# by tests/test_entrypoint_ssh.sh.
 cr_build_exec_env() {
     printf '%s\n' "HOME=/home/claude"
     [[ -n "${SSH_AUTH_SOCK:-}" ]] && printf '%s\n' "SSH_AUTH_SOCK=$SSH_AUTH_SOCK"
