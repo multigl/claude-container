@@ -153,7 +153,9 @@ def test_post_form_network_failure(monkeypatch):
 def test_serve_valid_cached_token_skips_http(cache, configured, monkeypatch):
     token = make_jwt(exp=int(time.time()) + 1000)
     cache.parent.mkdir(parents=True)
-    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt"}))
+    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt",
+                                 "client_id": "client-123",
+                                 "issuer": "https://vida.okta.com"}))
 
     def forbidden(*a, **k):
         raise AssertionError("post_form must not be called for a valid cached token")
@@ -167,7 +169,9 @@ def test_refresh_when_expired_persists_rotated_token(cache, configured, monkeypa
     cache.parent.mkdir(parents=True)
     # Within the 60s skew -> treated as needing refresh.
     cache.write_text(json.dumps({"id_token": make_jwt(exp=int(time.time()) + 10),
-                                 "refresh_token": "rt-old"}))
+                                 "refresh_token": "rt-old",
+                                 "client_id": "client-123",
+                                 "issuer": "https://vida.okta.com"}))
     monkeypatch.setattr(
         helper, "post_form",
         scripted_post_form([{"id_token": fresh, "refresh_token": "rt-new"}]),
@@ -181,7 +185,9 @@ def test_refresh_keeps_old_token_when_okta_omits_rotation(cache, configured, mon
     fresh = make_jwt(exp=int(time.time()) + 1000)
     cache.parent.mkdir(parents=True)
     cache.write_text(json.dumps({"id_token": make_jwt(exp=int(time.time()) + 10),
-                                 "refresh_token": "rt-old"}))
+                                 "refresh_token": "rt-old",
+                                 "client_id": "client-123",
+                                 "issuer": "https://vida.okta.com"}))
     monkeypatch.setattr(helper, "post_form",
                         scripted_post_form([{"id_token": fresh}]))
 
@@ -192,7 +198,9 @@ def test_refresh_keeps_old_token_when_okta_omits_rotation(cache, configured, mon
 def test_refresh_failure_returns_none(cache, configured, monkeypatch):
     cache.parent.mkdir(parents=True)
     cache.write_text(json.dumps({"id_token": make_jwt(exp=int(time.time()) + 10),
-                                 "refresh_token": "rt"}))
+                                 "refresh_token": "rt",
+                                 "client_id": "client-123",
+                                 "issuer": "https://vida.okta.com"}))
     monkeypatch.setattr(helper, "post_form",
                         scripted_post_form([{"error": "invalid_grant"}]))
     assert helper.serve_or_refresh() is None
@@ -200,6 +208,60 @@ def test_refresh_failure_returns_none(cache, configured, monkeypatch):
 
 def test_serve_empty_cache_returns_none(cache, configured):
     assert helper.serve_or_refresh() is None
+
+
+def test_serve_mismatched_client_id_forces_relogin(cache, configured, monkeypatch):
+    token = make_jwt(exp=int(time.time()) + 1000)
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt",
+                                 "client_id": "OTHER",
+                                 "issuer": "https://vida.okta.com"}))
+
+    def forbidden(*a, **k):
+        raise AssertionError("identity mismatch must not attempt a refresh")
+
+    monkeypatch.setattr(helper, "post_form", forbidden)
+    assert helper.serve_or_refresh() is None
+
+
+def test_serve_mismatched_issuer_forces_relogin(cache, configured, monkeypatch):
+    token = make_jwt(exp=int(time.time()) + 1000)
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt",
+                                 "client_id": "client-123",
+                                 "issuer": "https://other.okta.com"}))
+
+    def forbidden(*a, **k):
+        raise AssertionError("identity mismatch must not attempt a refresh")
+
+    monkeypatch.setattr(helper, "post_form", forbidden)
+    assert helper.serve_or_refresh() is None
+
+
+def test_serve_legacy_cache_without_identity_forces_relogin(cache, configured, monkeypatch):
+    token = make_jwt(exp=int(time.time()) + 1000)
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt"}))
+
+    def forbidden(*a, **k):
+        raise AssertionError("legacy cache mismatch must not attempt a refresh")
+
+    monkeypatch.setattr(helper, "post_form", forbidden)
+    assert helper.serve_or_refresh() is None
+
+
+def test_serve_mismatch_logs_relogin_needed(cache, configured, capsys):
+    token = make_jwt(exp=int(time.time()) + 1000)
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps({"id_token": token, "client_id": "OTHER",
+                                 "issuer": "https://vida.okta.com"}))
+    assert helper.serve_or_refresh() is None
+    assert "different OKTA_CLIENT_ID" in capsys.readouterr().err
+
+
+def test_serve_empty_cache_emits_no_mismatch_log(cache, configured, capsys):
+    assert helper.serve_or_refresh() is None
+    assert "different OKTA" not in capsys.readouterr().err
 
 
 # --- device_login ------------------------------------------------------------
@@ -281,7 +343,9 @@ def test_main_requires_client_id(monkeypatch):
 def test_main_emits_cached_token(cache, configured, capsys):
     token = make_jwt(exp=int(time.time()) + 1000)
     cache.parent.mkdir(parents=True)
-    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt"}))
+    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt",
+                                 "client_id": "client-123",
+                                 "issuer": "https://vida.okta.com"}))
 
     with pytest.raises(SystemExit) as exit_info:
         helper.main([])
@@ -293,7 +357,9 @@ def test_main_emits_cached_token(cache, configured, capsys):
 def test_main_login_only_prints_nothing_to_stdout(cache, configured, capsys):
     token = make_jwt(exp=int(time.time()) + 1000)
     cache.parent.mkdir(parents=True)
-    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt"}))
+    cache.write_text(json.dumps({"id_token": token, "refresh_token": "rt",
+                                 "client_id": "client-123",
+                                 "issuer": "https://vida.okta.com"}))
 
     assert helper.main(["--login-only"]) is None
     assert capsys.readouterr().out == ""

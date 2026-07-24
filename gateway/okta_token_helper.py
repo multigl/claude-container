@@ -151,9 +151,23 @@ def locked(function):
         lock.close()
 
 
+def _identity_matches(cache):
+    """True if the cache records the client_id/issuer it was minted under and
+    both match the current environment."""
+    return cache.get("client_id") == CLIENT_ID and cache.get("issuer") == ISSUER
+
+
 def serve_or_refresh():
     """Return a valid id_token from cache or a silent refresh, else None."""
     cache = read_cache()
+    # A cached token is only trustworthy if it was minted under the CURRENT
+    # client_id/issuer. On a mismatch (or a legacy cache with no identity fields)
+    # both tokens are stale -- the refresh_token is client-bound and Okta would
+    # reject it -- so discard and fall through to device login. An empty cache is
+    # "not logged in", not a mismatch, so it must not trip this or log.
+    if (cache.get("id_token") or cache.get("refresh_token")) and not _identity_matches(cache):
+        log("cached credentials were issued for a different OKTA_CLIENT_ID/OKTA_ISSUER; re-login needed")
+        return None
     id_token = cache.get("id_token")
     refresh_token = cache.get("refresh_token")
 
