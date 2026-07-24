@@ -4,7 +4,7 @@
 # ~/.ssh. The final `exec gosu` can't be unit-run, so assert on the source.
 cd "$(dirname "$0")"
 source ./lib.sh
-EP="$(pwd)/../bin/docker-entrypoint.sh"
+EP="$(pwd)/../bin/container-entrypoint.sh"
 src="$(cat "$EP")"
 
 assert_contains "$src" 'exec_env+=( "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" )' "entrypoint preserves SSH_AUTH_SOCK into exec_env"

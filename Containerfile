@@ -98,7 +98,7 @@ RUN userdel -r node 2>/dev/null || true \
 
 # Default statusline at a flavor-neutral path. The entrypoint copies a host
 # override over this at boot when ~/.claude/statusline-command.sh was staged
-# (see docker-entrypoint.sh "statusline override").
+# (see container-entrypoint.sh "statusline override").
 COPY bin/statusline.sh /opt/claude/statusline.sh
 RUN chmod +x /opt/claude/statusline.sh
 
@@ -110,12 +110,12 @@ RUN chmod +x /opt/claude/merge-settings.sh
 COPY bin/rebuild-memory-index.sh /opt/claude/rebuild-memory-index.sh
 RUN chmod +x /opt/claude/rebuild-memory-index.sh
 
-COPY bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+COPY bin/container-entrypoint.sh /usr/local/bin/container-entrypoint.sh
+RUN chmod +x /usr/local/bin/container-entrypoint.sh
 
 WORKDIR /workspace
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/container-entrypoint.sh"]
 CMD ["claude"]
 
 # ---------- vertex flavor ----------

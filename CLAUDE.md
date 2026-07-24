@@ -75,7 +75,7 @@ into `~/.local/bin`. Flags: `--local` (skip clone; used by `just install`), `--a
 
 ## How config seeding works
 
-On first launch `docker-entrypoint.sh` copies `/opt/claude-seed` → `~/.claude`
+On first launch `container-entrypoint.sh` copies `/opt/claude-seed` → `~/.claude`
 (the host `~/.local/state/vida-claude-container/<flavor>/claude` bind mount) with
 `rsync --ignore-existing`, so user
 edits survive. `CLAUDE_RESEED=1` (via `just reseed`) instead overwrites the seeded

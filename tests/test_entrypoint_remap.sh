@@ -9,7 +9,7 @@ source ./lib.sh
 # Source just the function out of the entrypoint. The entrypoint defines its
 # functions, then early-returns when CLAUDE_ENTRYPOINT_LIB=1 (before it runs any
 # container-only boot logic).
-CLAUDE_ENTRYPOINT_LIB=1 source ../bin/docker-entrypoint.sh
+CLAUDE_ENTRYPOINT_LIB=1 source ../bin/container-entrypoint.sh
 
 # helper: arg1 HOST_UID, arg2 current claude uid, arg3 optional signal
 run() { _CLAUDE_UID_REMAP="${3:-}" HOST_UID="$1" cr_should_remap "$2" && echo yes || echo no; }
