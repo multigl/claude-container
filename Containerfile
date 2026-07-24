@@ -3,7 +3,7 @@
 #   docker build --target gateway -t claude-gateway:latest .   # routes via an LLM gateway
 # The shared `base` stage is built once and cached; each flavor adds only its
 # own payload (vertex gets gcloud; gateway gets the gateway ENV + apiKeyHelper).
-FROM node:20-bookworm-slim AS base
+FROM node:24-bookworm-slim AS base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DISABLE_AUTOUPDATER=1
@@ -70,11 +70,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/b
 # Lives under /opt/claude-seed; copied into ~/.claude (the bind-mount from
 # host ~/.claude-<flavor>) on first container start by the entrypoint.
 # seed-common/ is flavor-neutral; each flavor stage overlays its settings.json.
-ARG SUPERPOWERS_SHA=f2cbfbefebbfef77321e4c9abc9e949826bea9d7
-ARG SUPERPOWERS_VERSION=5.1.0
-ARG CAVEMAN_SHA=ef6050c5e1848b6880ff47c32ade1a608a64f85e
+ARG SUPERPOWERS_SHA=3dcbd5c4b48e02263fbf4a3c01e3fe4f81d584d9
+ARG SUPERPOWERS_VERSION=6.2.0
+ARG CAVEMAN_SHA=0d95a81d35a9f2d123a5e9430d1cfc43d55f1bb0
 # Cache dir name matches the short SHA used by `claude plugin` on the host.
-ARG CAVEMAN_VERSION=ef6050c5e184
+ARG CAVEMAN_VERSION=0d95a81d35a9
 
 COPY seed-common/ /opt/claude-seed/
 
@@ -157,8 +157,8 @@ ARG GATEWAY_BASE_URL=https://your-gateway.example.com
 ENV ANTHROPIC_BASE_URL=${GATEWAY_BASE_URL} \
     ENABLE_TOOL_SEARCH=true \
     ANTHROPIC_MODEL=claude-opus-4-8 \
-    ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6 \
-    ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8 \
+    ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5 \
+    ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m] \
     ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5 \
     CLAUDE_FLAVOR_NAME=gateway
 # Model IDs are placeholders -- set them to the model_name strings your gateway
