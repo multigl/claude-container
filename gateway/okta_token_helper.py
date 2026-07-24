@@ -192,6 +192,9 @@ def serve_or_refresh():
                     "id_token": new_id_token,
                     # Persist a rotated refresh_token if Okta returns one.
                     "refresh_token": response.get("refresh_token") or refresh_token,
+                    # Record the identity this token was minted under (see gate).
+                    "client_id": CLIENT_ID,
+                    "issuer": ISSUER,
                 }
             )
             return new_id_token
@@ -227,7 +230,8 @@ def device_login():
         )
         if token.get("id_token"):
             locked(lambda: write_cache(
-                {"id_token": token["id_token"], "refresh_token": token.get("refresh_token", "")}
+                {"id_token": token["id_token"], "refresh_token": token.get("refresh_token", ""),
+                 "client_id": CLIENT_ID, "issuer": ISSUER}
             ))
             log("Authorized.")
             return token["id_token"]

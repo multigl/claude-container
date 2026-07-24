@@ -206,6 +206,22 @@ def test_refresh_failure_returns_none(cache, configured, monkeypatch):
     assert helper.serve_or_refresh() is None
 
 
+def test_refresh_stamps_identity(cache, configured, monkeypatch):
+    fresh = make_jwt(exp=int(time.time()) + 1000)
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps({"id_token": make_jwt(exp=int(time.time()) + 10),
+                                 "refresh_token": "rt",
+                                 "client_id": "client-123",
+                                 "issuer": "https://vida.okta.com"}))
+    monkeypatch.setattr(helper, "post_form",
+                        scripted_post_form([{"id_token": fresh, "refresh_token": "rt2"}]))
+
+    assert helper.serve_or_refresh() == fresh
+    written = json.loads(cache.read_text())
+    assert written["client_id"] == "client-123"
+    assert written["issuer"] == "https://vida.okta.com"
+
+
 def test_serve_empty_cache_returns_none(cache, configured):
     assert helper.serve_or_refresh() is None
 
@@ -283,7 +299,25 @@ def test_device_login_happy_path_writes_cache(cache, configured, monkeypatch):
     ]))
 
     assert helper.device_login() == token
-    assert json.loads(cache.read_text()) == {"id_token": token, "refresh_token": "rt"}
+    assert json.loads(cache.read_text()) == {
+        "id_token": token, "refresh_token": "rt",
+        "client_id": "client-123", "issuer": "https://vida.okta.com",
+    }
+
+
+def test_device_login_stamps_identity(cache, configured, monkeypatch):
+    force_tty(monkeypatch)
+    token = make_jwt(exp=int(time.time()) + 1000)
+    monkeypatch.setattr(helper.time, "sleep", lambda s: None)
+    monkeypatch.setattr(helper, "post_form", scripted_post_form([
+        {"device_code": "dc", "interval": 1, "expires_in": 600},
+        {"id_token": token, "refresh_token": "rt"},
+    ]))
+
+    assert helper.device_login() == token
+    written = json.loads(cache.read_text())
+    assert written["client_id"] == "client-123"
+    assert written["issuer"] == "https://vida.okta.com"
 
 
 def test_device_login_polls_through_pending(cache, configured, monkeypatch):
