@@ -60,4 +60,27 @@ out="$(cr_render_gitconfig "$work/does-not-exist")"
 assert_not_contains "$out" "[user]"            "gitconfig: missing file -> no [user]"
 assert_contains     "$out" "defaultBranch = main" "gitconfig: missing file -> static blocks"
 
+# --- cr_render_global_index --------------------------------------------------
+# Global MEMORY.md bullets are inlined into ~/.claude/CLAUDE.md (one dir above
+# memory-global/), so a bare-filename link would 404. Bare targets get the
+# memory-global/ prefix; already-qualified targets (slash/URL) are left alone;
+# an empty/missing index yields the placeholder.
+cat > "$work/gmem.md" <<'MD'
+# Memory index
+
+- [byo provider spec](byo-provider-spec.md) — some hook
+- [already qualified](memory-global/keep.md) — must not double-prefix
+- [external](https://example.com/x.md) — URL untouched
+MD
+out="$(cr_render_global_index "$work/gmem.md")"
+assert_contains     "$out" "](memory-global/byo-provider-spec.md)" "index: bare target prefixed"
+assert_not_contains "$out" "](byo-provider-spec.md)"               "index: original bare target rewritten"
+assert_contains     "$out" "](memory-global/keep.md)"              "index: already-qualified kept"
+assert_not_contains "$out" "memory-global/memory-global"           "index: no double-prefix"
+assert_contains     "$out" "](https://example.com/x.md)"          "index: URL target untouched"
+
+printf '# Memory index\n\n_(none yet)_\n' > "$work/gmem-empty.md"
+assert_eq "_(none yet)_" "$(cr_render_global_index "$work/gmem-empty.md")" "index: no bullets -> placeholder"
+assert_eq "_(none yet)_" "$(cr_render_global_index "$work/does-not-exist.md")" "index: missing file -> placeholder"
+
 finish

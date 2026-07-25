@@ -100,6 +100,20 @@ cr_build_exec_env() {
     return 0
 }
 
+# Emit the global-memory index bullets for inlining into ~/.claude/CLAUDE.md,
+# rewriting each bare-filename link target to memory-global/<file> so it resolves
+# from ~/.claude/ (where the composed file lives) instead of 404ing. Targets that
+# already contain a slash or a scheme (absolute paths, URLs, an already-prefixed
+# memory-global/…) are left untouched. Falls back to a placeholder when the index
+# has no bullets. Emits on stdout. Unit-tested by tests/test_entrypoint_lib.sh.
+cr_render_global_index() {  # cr_render_global_index <global_memory_md>
+    if grep -qE '^- ' "$1" 2>/dev/null; then
+        grep -E '^- ' "$1" | sed -E 's#\]\(([^):/]+\.md)\)#](memory-global/\1)#g'
+    else
+        echo "_(none yet)_"
+    fi
+}
+
 # When sourced as a library (tests), define functions then stop before any
 # container-only boot logic. Harmless when executed normally (var is unset).
 [[ "${CLAUDE_ENTRYPOINT_LIB:-}" == 1 ]] && return 0
@@ -307,11 +321,7 @@ frontmatter and rebuilt every launch — edit the fact files, not the index.
 
 ## Global memory index
 HDR
-        if grep -qE '^- ' "$GLOBAL_MEM/MEMORY.md" 2>/dev/null; then
-            grep -E '^- ' "$GLOBAL_MEM/MEMORY.md"
-        else
-            echo "_(none yet)_"
-        fi
+        cr_render_global_index "$GLOBAL_MEM/MEMORY.md"
     } > "$_cmd_tmp"
     chown claude:claude "$_cmd_tmp" 2>/dev/null || true
     chmod 0644 "$_cmd_tmp" 2>/dev/null || true
