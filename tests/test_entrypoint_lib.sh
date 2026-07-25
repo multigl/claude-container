@@ -15,18 +15,19 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 # Container keeps its own command paths + existing env; host env/headers are
 # grafted onto servers present in BOTH; host-only servers are ignored.
 cat > "$work/c.json" <<'JSON'
-{"trust":true,"mcpServers":{"jira":{"command":"/opt/x","env":{"KEEP":"1"}},"conf":{"command":"/opt/y"}}}
+{"trust":true,"mcpServers":{"jira":{"command":"/opt/x","env":{"KEEP":"1","SHARED":"container"},"headers":{"H":"container"}},"conf":{"command":"/opt/y"}}}
 JSON
 cat > "$work/h.json" <<'JSON'
-{"mcpServers":{"jira":{"command":"/host/x","env":{"TOKEN":"secret"},"headers":{"H":"v"}},"extra":{"command":"/z"}}}
+{"mcpServers":{"jira":{"command":"/host/x","env":{"TOKEN":"secret","SHARED":"host"},"headers":{"H":"v"}},"extra":{"command":"/z"}}}
 JSON
 out="$(cr_graft_mcp_creds "$work/c.json" "$work/h.json")"
-assert_eq "/opt/x"  "$(jq -r '.mcpServers.jira.command'   <<<"$out")" "graft: container command preserved"
-assert_eq "1"       "$(jq -r '.mcpServers.jira.env.KEEP'  <<<"$out")" "graft: existing container env kept"
-assert_eq "secret"  "$(jq -r '.mcpServers.jira.env.TOKEN' <<<"$out")" "graft: host env merged in"
-assert_eq "v"       "$(jq -r '.mcpServers.jira.headers.H' <<<"$out")" "graft: host headers grafted"
-assert_eq "null"    "$(jq -r '.mcpServers.extra'          <<<"$out")" "graft: host-only server ignored"
-assert_eq "true"    "$(jq -r '.trust'                     <<<"$out")" "graft: top-level container keys preserved"
+assert_eq "/opt/x"  "$(jq -r '.mcpServers.jira.command'    <<<"$out")" "graft: container command preserved"
+assert_eq "1"       "$(jq -r '.mcpServers.jira.env.KEEP'   <<<"$out")" "graft: existing container env kept"
+assert_eq "secret"  "$(jq -r '.mcpServers.jira.env.TOKEN'  <<<"$out")" "graft: host env merged in"
+assert_eq "host"    "$(jq -r '.mcpServers.jira.env.SHARED' <<<"$out")" "graft: host env wins on conflict"
+assert_eq "v"       "$(jq -r '.mcpServers.jira.headers.H'  <<<"$out")" "graft: host header wins on conflict"
+assert_eq "null"    "$(jq -r '.mcpServers.extra'           <<<"$out")" "graft: host-only server ignored"
+assert_eq "true"    "$(jq -r '.trust'                      <<<"$out")" "graft: top-level container keys preserved"
 
 # --- cr_sync_mcp_servers -----------------------------------------------------
 # Deep-merge (jq *) the seed's mcpServers over the container's: seed keys win on
