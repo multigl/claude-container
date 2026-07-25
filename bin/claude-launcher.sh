@@ -349,6 +349,13 @@ run_in_container() {
     # Only files that exist are staged. STAGE is intentionally NOT `local`: the
     # EXIT trap runs in the script's global scope, where a function-local would be
     # out of scope (expanding to '' -> rm -rf '' -> no cleanup).
+    # Sweep stage dirs orphaned by a prior crash: the EXIT trap below only removes
+    # THIS run's dir, so a SIGKILL/OOM/host-crash strands earlier ones (each a
+    # snapshot of host ~/.claude.json + git identity) under STATE_DIR forever. The
+    # older-than-a-day threshold (-mtime +0) spares the fresh stage dir of any
+    # concurrently-running sibling launch.
+    find "$STATE_DIR" -maxdepth 1 -type d -name '.stage.*' -mtime +0 \
+        -exec rm -rf {} + 2>/dev/null || true
     STAGE="$(mktemp -d "${STATE_DIR}/.stage.XXXXXX")"
     trap 'rm -rf "$STAGE"' EXIT
     if [[ -f "$HOST_SETTINGS" ]]; then

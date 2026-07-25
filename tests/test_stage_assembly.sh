@@ -105,4 +105,18 @@ rec="$(run_launch "$h")"
 assert_eq "600" "$(perms x "$cfg/env")" "pre-existing env file re-tightened to 600"
 rm -rf "$h" "$rec"
 
+# --- #7: stale .stage.* dirs orphaned by a crash are swept at boot ------------
+# The EXIT trap only removes the current run's stage dir; a SIGKILL/OOM/host-crash
+# leaves earlier ones (holding host ~/.claude.json + git identity) behind. A boot
+# sweep removes those older than a day, sparing a concurrent sibling's fresh one.
+h="$(mktemp -d)"
+state="$h/.local/state/vida-claude-container/vertex"
+mkdir -p "$state" "$h/.config/vida-claude-container/vertex"
+mkdir -p "$state/.stage.stale" "$state/.stage.fresh"
+touch -t 202001010000 "$state/.stage.stale"      # 2 days+ old -> swept
+rec="$(run_launch "$h")"
+assert_eq "" "$(ls -d "$state/.stage.stale" 2>/dev/null || true)" "stale stage dir swept at boot"
+assert_eq "$state/.stage.fresh" "$(ls -d "$state/.stage.fresh" 2>/dev/null || true)" "fresh stage dir spared"
+rm -rf "$h" "$rec"
+
 finish
