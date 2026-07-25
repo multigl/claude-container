@@ -125,13 +125,19 @@ def write_cache(tokens):
     os.makedirs(directory, exist_ok=True)
     os.chmod(directory, 0o700)
     descriptor, temp_path = tempfile.mkstemp(dir=directory)
+    closed = False
     try:
         os.write(descriptor, json.dumps(tokens).encode())
         os.close(descriptor)
+        closed = True
         os.chmod(temp_path, 0o600)
         os.replace(temp_path, CACHE)  # atomic
     except Exception:
-        os.close(descriptor)
+        # Only close if the in-try close hadn't already run: a second close of
+        # the same fd raises EBADF, which would mask the real error and skip the
+        # unlink below, leaking temp_path.
+        if not closed:
+            os.close(descriptor)
         try:
             os.unlink(temp_path)
         except OSError:

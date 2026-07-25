@@ -108,6 +108,32 @@ def test_write_cache_leaves_no_temp_files(cache):
     assert [p.name for p in cache.parent.iterdir()] == ["okta.json"]
 
 
+def test_write_cache_failure_after_close_reraises_original(cache, monkeypatch):
+    """A post-close chmod/replace failure must propagate the ORIGINAL error, not
+    an EBADF from re-closing the already-closed descriptor in the except block."""
+    boom = RuntimeError("replace failed")
+
+    def fail(*args, **kwargs):
+        raise boom
+
+    monkeypatch.setattr(helper.os, "replace", fail)
+    with pytest.raises(RuntimeError) as excinfo:
+        helper.write_cache({"id_token": "a"})
+    assert excinfo.value is boom
+
+
+def test_write_cache_failure_after_close_removes_temp(cache, monkeypatch):
+    """The EBADF mask (from a double close) also skips os.unlink, leaking a temp
+    file. On any write failure the cache dir must be left empty."""
+    def fail(*args, **kwargs):
+        raise RuntimeError("replace failed")
+
+    monkeypatch.setattr(helper.os, "replace", fail)
+    with pytest.raises(RuntimeError):
+        helper.write_cache({"id_token": "a"})
+    assert list(cache.parent.iterdir()) == []
+
+
 def test_read_cache_missing_returns_empty(cache):
     assert helper.read_cache() == {}
 
