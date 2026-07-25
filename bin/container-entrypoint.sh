@@ -236,10 +236,11 @@ if [[ -f "$SEED/dotclaude.json" ]] && [[ ! -s "$DOTCLAUDE" ]]; then
     cat "$SEED/dotclaude.json" > "$DOTCLAUDE"
 fi
 
-# Ensure the container's mcpServers block always matches the seed's --
-# container's command paths and server definitions are authoritative; host
-# only contributes credentials. Without this, an older host claude.json
-# from a prior run could be missing the mcpServers skeleton entirely.
+# Deep-merge the seed's mcpServers skeleton over the container's: the seed's
+# command paths and server definitions win on conflict and every seed server is
+# guaranteed present (host only contributes credentials). This is additive, not a
+# replacement -- container-only mcpServers entries survive the merge. Without it,
+# an older host claude.json from a prior run could be missing the skeleton entirely.
 if [[ -f "$SEED/dotclaude.json" ]] && command -v jq >/dev/null 2>&1; then
     tmp="$(mktemp)"
     cr_sync_mcp_servers "$DOTCLAUDE" "$SEED/dotclaude.json" > "$tmp" \

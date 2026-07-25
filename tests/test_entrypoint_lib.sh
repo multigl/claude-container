@@ -32,15 +32,16 @@ assert_eq "true"    "$(jq -r '.trust'                     <<<"$out")" "graft: to
 # Deep-merge (jq *) the seed's mcpServers over the container's: seed keys win on
 # conflict and seed-only servers are added; unrelated top-level container keys stay.
 cat > "$work/c2.json" <<'JSON'
-{"trust":true,"mcpServers":{"a":{"command":"/old"}}}
+{"trust":true,"mcpServers":{"a":{"command":"/old"},"local":{"command":"/only-here"}}}
 JSON
 cat > "$work/seed.json" <<'JSON'
 {"mcpServers":{"a":{"command":"/seed"},"b":{"command":"/newb"}}}
 JSON
 out="$(cr_sync_mcp_servers "$work/c2.json" "$work/seed.json")"
-assert_eq "/seed" "$(jq -r '.mcpServers.a.command' <<<"$out")" "sync: seed wins on shared server"
-assert_eq "/newb" "$(jq -r '.mcpServers.b.command' <<<"$out")" "sync: seed-only server added"
-assert_eq "true"  "$(jq -r '.trust'                <<<"$out")" "sync: container top-level keys preserved"
+assert_eq "/seed"      "$(jq -r '.mcpServers.a.command'     <<<"$out")" "sync: seed wins on shared server"
+assert_eq "/newb"      "$(jq -r '.mcpServers.b.command'     <<<"$out")" "sync: seed-only server added"
+assert_eq "/only-here" "$(jq -r '.mcpServers.local.command' <<<"$out")" "sync: container-only server survives"
+assert_eq "true"       "$(jq -r '.trust'                    <<<"$out")" "sync: container top-level keys preserved"
 
 # --- cr_render_gitconfig -----------------------------------------------------
 # Valid [user] identity is included ahead of the static blocks; an invalid or
