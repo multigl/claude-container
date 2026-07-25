@@ -90,4 +90,19 @@ assert_eq "yes" "$moved" "legacy claude.json migrated into claude/ dir mount"
 assert_eq "" "$(ls -A "$state"/claude.json 2>/dev/null || true)" "old sibling claude.json removed"
 rm -rf "$h" "$rec"
 
+# perms MODE FILE: portable octal-perms fetch (GNU stat, then BSD/macOS stat).
+perms() { stat -c '%a' "$2" 2>/dev/null || stat -f '%Lp' "$2"; }
+
+# --- #8: a pre-existing env file with loose perms is re-tightened to 600 -------
+# The chmod used to run only when the file was first seeded, so a file left
+# world/group-readable (bad umask, a 644 restore) kept leaking MCP tokens.
+h="$(mktemp -d)"
+cfg="$h/.config/vida-claude-container/vertex"
+mkdir -p "$cfg"
+printf 'JIRA_API_TOKEN=secret\n' > "$cfg/env"
+chmod 644 "$cfg/env"
+rec="$(run_launch "$h")"
+assert_eq "600" "$(perms x "$cfg/env")" "pre-existing env file re-tightened to 600"
+rm -rf "$h" "$rec"
+
 finish

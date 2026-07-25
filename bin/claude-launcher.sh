@@ -304,8 +304,11 @@ CONFLUENCE_API_TOKEN=
 CONTEXT7_API_KEY=
 EOF
     } > "$HOST_ENV_FILE"
-    chmod 600 "$HOST_ENV_FILE"
 fi
+# Re-tighten every launch, not just on creation: a pre-existing env file left
+# world/group-readable (a bad umask, a restore from a 644 backup) would otherwise
+# keep leaking the MCP tokens it holds. Guarded so a missing file is a no-op.
+[[ -f "$HOST_ENV_FILE" ]] && chmod 600 "$HOST_ENV_FILE"
 
 # Ensure the flavor's credential directory exists (bind-mounted; see run_in_container).
 if [[ "$FLAVOR" == vertex ]]; then
