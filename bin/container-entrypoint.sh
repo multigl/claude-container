@@ -104,8 +104,11 @@ cr_build_exec_env() {
 # rewriting each bare-filename link target to memory-global/<file> so it resolves
 # from ~/.claude/ (where the composed file lives) instead of 404ing. Targets that
 # already contain a slash or a scheme (absolute paths, URLs, an already-prefixed
-# memory-global/…) are left untouched. Falls back to a placeholder when the index
-# has no bullets. Emits on stdout. Unit-tested by tests/test_entrypoint_lib.sh.
+# memory-global/…) are left untouched. Bare targets are assumed slug-like (the
+# rebuild script derives them from kebab-case `name:` frontmatter); a target with
+# a literal ')' before .md is malformed markdown anyway and left alone. Falls back
+# to a placeholder when the index has no bullets. Emits on stdout. Unit-tested by
+# tests/test_entrypoint_lib.sh.
 cr_render_global_index() {  # cr_render_global_index <global_memory_md>
     if grep -qE '^- ' "$1" 2>/dev/null; then
         grep -E '^- ' "$1" | sed -E 's#\]\(([^):/]+\.md)\)#](memory-global/\1)#g'
