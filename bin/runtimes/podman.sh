@@ -2,7 +2,9 @@
 # podman driver (rootless Linux). Rootless podman maps the host user to container
 # root, so bind mounts arrive root-owned and the entrypoint's usermod/chown remap
 # is wrong. Fix: keep-id maps the host user onto the image's claude user (uid
-# 1000), and we signal the entrypoint to SKIP its remap. On SELinux-enforcing
+# 1000), `--user 0:0` keeps the entrypoint root inside that userns (keep-id would
+# otherwise default the container user to 1000 and break gosu -- see rt_run_flags),
+# and we signal the entrypoint to SKIP its remap. On SELinux-enforcing
 # hosts, disable label confinement for this container (simpler + safer than
 # per-mount :z relabeling, which would relabel shared host dirs like ~/.claude).
 
@@ -17,6 +19,15 @@ _rt_selinux_on() {
 
 rt_run_flags() {
     printf '%s\n' '--userns=keep-id:uid=1000,gid=1000'
+    # keep-id also sets the container's DEFAULT USER to the mapped uid (1000), so
+    # without this the entrypoint starts as claude, not root, and its first
+    # `gosu claude ...` dies with `failed switching to "claude": operation not
+    # permitted` (setgroups/setgid need CAP_SETGID). Force root inside the userns:
+    # root is a subuid here, harmless on the host, and the entrypoint still drops
+    # to claude (uid 1000 = the host user, via keep-id) for the session, so mount
+    # writes land host-owned.
+    printf '%s\n' '--user'
+    printf '%s\n' '0:0'
     printf '%s\n' '-e'
     printf '%s\n' '_CLAUDE_UID_REMAP=skip'
     if _rt_selinux_on; then

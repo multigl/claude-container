@@ -34,8 +34,14 @@ The image runs under one of three container runtimes, chosen by a dispatcher —
 - **docker** (rootful Linux / Docker Desktop): unchanged — HOST_UID/HOST_GID remap
   in the entrypoint.
 - **podman** (rootless Linux): passes `--userns=keep-id:uid=1000,gid=1000` to map
-  the host user onto the image's `claude` (uid 1000), plus an internal
-  `_CLAUDE_UID_REMAP=skip` so the entrypoint skips its usermod/chown remap. On
+  the host user onto the image's `claude` (uid 1000), **plus `--user 0:0`**, plus an
+  internal `_CLAUDE_UID_REMAP=skip` so the entrypoint skips its usermod/chown remap.
+  `--user 0:0` is load-bearing: `keep-id` also sets the container's *default user*
+  to the mapped uid, so without it the entrypoint starts as `claude` instead of
+  root and its first `gosu claude …` dies with `error: failed switching to
+  "claude": operation not permitted` (setgroups/setgid need CAP_SETGID). Container
+  root is a subuid on the host, and the entrypoint still drops to `claude`
+  (= the host user via keep-id) for the session, so mount writes land host-owned. On
   SELinux-enforcing hosts it adds `--security-opt label=disable` (chosen over
   per-mount `:z` relabeling, which would relabel shared host dirs like `~/.claude`).
   `_CLAUDE_UID_REMAP` is internal — per-run `-e` only, never in the env file.
