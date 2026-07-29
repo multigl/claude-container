@@ -147,13 +147,57 @@ _ssh_combo_supported() {
     _cr_is_linux && { [[ "$RUNTIME" == docker || "$RUNTIME" == podman ]]; }
 }
 
+# Resolve a signingkey-shaped value (literal ssh pubkey OR path to one) to a
+# literal single-line ssh public key on stdout. Detects literals by algorithm
+# prefix FIRST -- key bodies are base64 (contain '/'), so a path heuristic alone
+# would misclassify a literal key as a file path. LABEL is used only in the
+# warning message so callers (user.signingkey vs the container fallback key)
+# get an actionable error. Returns 1 (message already printed) on any failure.
+_resolve_ssh_pubkey_literal() {  # _resolve_ssh_pubkey_literal KEY LABEL
+    local key="$1" label="$2" literal="$1" p
+    case "$key" in
+        ssh-*|ecdsa-*|sk-*|key::*) : ;;                 # literal pubkey; use verbatim
+        /*|"~"*|./*|*/*)                                # looks like a path; inline the file
+            p="$key"; [[ "$p" == "~"* ]] && p="${HOME}${p#\~}"
+            if [[ -r "$p" ]]; then
+                literal="$(cat "$p" 2>/dev/null || true)"
+            else
+                echo ">> $label '$key' is not a readable file; skipping signingkey graft." >&2
+                return 1
+            fi ;;
+        *) : ;;                                         # unknown shape; validated below
+    esac
+    # Final literal must be a single-line ssh public key (guards multiline files,
+    # accidental private-key paths, and garbage values -- which would emit an
+    # invalid ~/.gitconfig or copy a secret into the stage dir).
+    if [[ -z "$literal" || "$literal" == *$'\n'* ]] || \
+       { [[ "$literal" != ssh-* && "$literal" != ecdsa-* && "$literal" != sk-* && "$literal" != key::* ]]; }; then
+        echo ">> resolved $label is not a single-line ssh public key; skipping signingkey graft." >&2
+        return 1
+    fi
+    printf '%s' "$literal"
+}
+
 # Resolve git identity + SSH signing FRESH from the host $PWD (honoring includeIf
 # so personal-vs-work picks the right email/key) and emit a [user]/[gpg]/[commit]
 # block to stdout. Written into the per-run stage dir each launch, never persisted
 # -- the container always runs at /workspace, so a persisted identity would freeze
 # to the first repo. Only SSH signing is supported in-container.
+#
+# Host signing key format decides the path:
+#   - gpg.format=ssh         -> use user.signingkey verbatim (already works here).
+#   - gpg.format unset/other -> a real gpg/x509 identity (e.g. a yubikey), which
+#     can't be used in-container (no secret key, no smime). Fall back to
+#     `claude-container.signingkey-ssh` if the user configured one -- a SEPARATE
+#     ssh keypair dedicated to in-container signing. It is looked up via the SAME
+#     `git -C "$PWD" config --get`, so it rides whatever `includeIf gitdir:` block
+#     already selected the host identity: put it in the same personal/work
+#     included file as the real signingkey and it travels with that identity.
+#     Requires CLAUDE_FORWARD_SSH=1 (the private half must live in the host's
+#     forwarded ssh-agent, never in the container). See README.md "Git & GitHub
+#     inside the container".
 _stage_git_identity() {
-    local name email fmt key sign
+    local name email fmt key sign fallback literal=""
     name="$(git -C "$PWD" config --get user.name      2>/dev/null || true)"
     email="$(git -C "$PWD" config --get user.email     2>/dev/null || true)"
     fmt="$(git -C "$PWD" config --get gpg.format       2>/dev/null || true)"
@@ -164,38 +208,18 @@ _stage_git_identity() {
     [[ -n "$name" ]]  && printf '    name = %s\n'  "$name"
     [[ -n "$email" ]] && printf '    email = %s\n' "$email"
 
-    # No signing key host-side -> identity only.
-    [[ -n "$key" ]] || return 0
-
-    # Only ssh signing works in-container (no gpg secret key; no x509/smime).
-    if [[ "$fmt" != "ssh" ]]; then
-        echo ">> host git uses ${fmt:-openpgp} signing; only ssh signing works in-container. Skipping signingkey graft (name/email still applied)." >&2
-        return 0
-    fi
-
-    # Resolve signingkey to a literal single-line ssh public key. Detect literals
-    # by algorithm prefix FIRST -- key bodies are base64 (contain '/'), so a path
-    # heuristic alone would misclassify a literal key as a file path.
-    local literal="$key" p
-    case "$key" in
-        ssh-*|ecdsa-*|sk-*|key::*) : ;;                 # literal pubkey; use verbatim
-        /*|"~"*|./*|*/*)                                # looks like a path; inline the file
-            p="$key"; [[ "$p" == "~"* ]] && p="${HOME}${p#\~}"
-            if [[ -r "$p" ]]; then
-                literal="$(cat "$p" 2>/dev/null || true)"
-            else
-                echo ">> user.signingkey '$key' is not a readable file; skipping signingkey graft." >&2
-                return 0
-            fi ;;
-        *) : ;;                                         # unknown shape; validated below
-    esac
-    # Final literal must be a single-line ssh public key (guards multiline files,
-    # accidental private-key paths, and garbage values -- which would emit an
-    # invalid ~/.gitconfig or copy a secret into the stage dir).
-    if [[ -z "$literal" || "$literal" == *$'\n'* ]] || \
-       { [[ "$literal" != ssh-* && "$literal" != ecdsa-* && "$literal" != sk-* && "$literal" != key::* ]]; }; then
-        echo ">> resolved signing key is not a single-line ssh public key; skipping signingkey graft." >&2
-        return 0
+    if [[ -z "$key" ]]; then
+        return 0   # no signing key host-side -> identity only.
+    elif [[ "$fmt" == "ssh" ]]; then
+        literal="$(_resolve_ssh_pubkey_literal "$key" "user.signingkey")" || return 0
+    else
+        fallback="$(git -C "$PWD" config --get claude-container.signingkey-ssh 2>/dev/null || true)"
+        if [[ -z "$fallback" ]]; then
+            echo ">> host git uses ${fmt:-openpgp} signing; only ssh signing works in-container, and no claude-container.signingkey-ssh fallback is configured. Skipping signingkey graft (name/email still applied)." >&2
+            return 0
+        fi
+        echo ">> host git uses ${fmt:-openpgp} signing; using claude-container.signingkey-ssh fallback for in-container commit signing." >&2
+        literal="$(_resolve_ssh_pubkey_literal "$fallback" "claude-container.signingkey-ssh")" || return 0
     fi
 
     # NEVER graft gpg.ssh.program: the host's 1Password op-ssh-sign path does not

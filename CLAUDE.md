@@ -218,10 +218,18 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   rootless** (both bind-mount `$SSH_AUTH_SOCK`). **macOS + Docker Desktop is
   unsupported** — its `host-services` bridge can't forward the 1Password agent —
   and the launcher warns + skips there. SSH signing config is grafted from the
-  host git config only when `gpg.format = ssh` (openpgp/x509 → alerted + skipped);
-  `gpg.ssh.program` is deliberately never grafted so the container's own
-  `ssh-keygen` signs via the forwarded agent. GitHub host keys are baked into the
-  image so SSH push works.
+  host git config when `gpg.format = ssh`. When the host instead signs with
+  gpg/x509 (e.g. a yubikey — no secret key material to forward into a
+  container), `_stage_git_identity` (`bin/claude-launcher.sh`) falls back to a
+  custom `claude-container.signingkey-ssh` config value (literal `ssh-...`
+  pubkey or a path) if the user set one — read via the same `git -C "$PWD"
+  config --get`, so it rides whatever `includeIf gitdir:` block already
+  selected the host identity (put it in the same personal/work included file as
+  the real `user.signingkey`). Still requires `forward_ssh` — only the pubkey
+  ever reaches the container; the private half must live in the host's
+  forwarded agent. `gpg.ssh.program` is deliberately never grafted so the
+  container's own `ssh-keygen` signs via the forwarded agent. GitHub host keys
+  are baked into the image so SSH push works.
 - **Hadolint.** `GOOGLE_APPLICATION_CREDENTIALS` is exported at runtime by the
   entrypoint, not baked as `ENV`, to avoid the `SecretsUsedInArgOrEnv` warning on
   the `*_CREDENTIALS` name pattern.

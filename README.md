@@ -216,9 +216,27 @@ The container uses your **host** git/GitHub setup — no second login.
   - **Linux:** works with docker (rootful) and podman (rootless); the host
     `$SSH_AUTH_SOCK` is bind-mounted in.
   - **Signing** is picked up from your host git config automatically when
-    `gpg.format = ssh` (openpgp/x509 are skipped with a warning). Your signing key
-    is used via the forwarded agent; no key files are mounted. GitHub host keys are
-    baked in so SSH `git push` works.
+    `gpg.format = ssh`. Your signing key is used via the forwarded agent; no key
+    files are mounted. GitHub host keys are baked in so SSH `git push` works.
+  - **gpg/x509 signing (e.g. a yubikey) needs a fallback key.** gpg secret keys
+    and x509/smime can't be used in-container at all -- there's no secret key
+    material to forward. If your host signs with `gpg.format` unset/openpgp/x509,
+    set a separate, ssh, in-container-only signing key via a custom config value,
+    `claude-container.signingkey-ssh` (a literal `ssh-...` pubkey or a path to
+    one), in the **same** `includeIf gitdir:`-included file as your real
+    `user.signingkey` so it travels with that personal/work identity:
+
+    ```ini
+    # ~/.gitconfig-work (already includeIf-selected by directory)
+    [user]
+        signingkey = <your yubikey gpg key id>
+    [claude-container]
+        signingkey-ssh = ~/.ssh/container_signing.pub
+    ```
+
+    The container then commits signed with that ssh key instead of skipping
+    signing. Still requires `forward_ssh = true` above -- the matching private
+    key must live only in your host ssh-agent, never in the container.
 
 ## File locations (XDG)
 
