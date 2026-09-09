@@ -126,12 +126,3 @@ doctor:
             echo "  WARN: legacy shared bucket present ($STATE_CLAUDE_DIR/projects/-workspace)"; \
             echo "        run 'claude-{{flavor}} migrate-memory' from the owning repo"; \
         else echo "  ok: no legacy shared bucket"; fi
-    @echo "== legacy namespace =="
-    @paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh --print-paths)"; \
-        lc="$(printf '%s\n' "$paths" | sed -n 's/^LEGACY_CFG_DIR=//p')"; \
-        ls_="$(printf '%s\n' "$paths" | sed -n 's/^LEGACY_STATE_DIR=//p')"; \
-        found=0; \
-        for d in "$lc" "$ls_"; do \
-            if [ -n "$(ls -A "$d" 2>/dev/null)" ]; then echo "  WARN: legacy dir still holds data: $d"; found=1; fi; \
-        done; \
-        [ "$found" = 0 ] && echo "  ok: nothing left under vida-claude-container" || true

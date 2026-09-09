@@ -24,13 +24,13 @@ fl_auth() {
 fl_seed_env() {
     cat <<'EOF'
 # claude-gateway: the baked Okta apiKeyHelper reads these to mint an id_token.
-# OKTA_ISSUER = Vida Org server (no /oauth2/<id>); OKTA_CLIENT_ID = the Native
-# app client_id (must equal LiteLLM's JWT_AUDIENCE). Run `claude-gateway auth`
-# once to complete the browser device login. Passed in via --env-file.
-OKTA_ISSUER=https://vida.okta.com
+# OKTA_ISSUER = your Okta Org server (no /oauth2/<id>); OKTA_CLIENT_ID = the
+# Native app client_id (must equal LiteLLM's JWT_AUDIENCE). Run `claude-gateway
+# auth` once to complete the browser device login. Passed in via --env-file.
+OKTA_ISSUER=https://YOUR-ORG.okta.com
 OKTA_CLIENT_ID=
 CLAUDE_CODE_API_KEY_HELPER_TTL_MS=300000
-# ANTHROPIC_BASE_URL=https://litellm.local.sunbeam.network   # gateway endpoint override
+# ANTHROPIC_BASE_URL=https://litellm.internal.example.com   # gateway endpoint override
 
 EOF
     _env_block_mcp_atlassian

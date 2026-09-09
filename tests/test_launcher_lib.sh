@@ -16,7 +16,6 @@ probe="$(
       declare -f "$fn" >/dev/null 2>&1 && printf 'have:%s\n' "$fn"
     done
     printf 'NS:%s\n' "${NS:-unset}"
-    printf 'NS_LEGACY:%s\n' "${NS_LEGACY:-unset}"
   ) 2>/dev/null
   printf 'residue:[%s]\n' "$(ls -A "$h" 2>/dev/null | tr '\n' ' ')"
   rm -rf "$h"
@@ -27,7 +26,6 @@ assert_contains "$probe" "have:_is_truthy"                  "sourcing defines _i
 assert_contains "$probe" "have:_resolve_ssh_pubkey_literal" "sourcing defines _resolve_ssh_pubkey_literal"
 assert_contains "$probe" "have:_stage_git_identity"         "sourcing defines _stage_git_identity"
 assert_contains "$probe" "NS:claude-container"              "NS constant available when sourced"
-assert_contains "$probe" "NS_LEGACY:vida-claude-container"  "NS_LEGACY constant available when sourced"
 assert_contains "$probe" "residue:[]"                       "sourcing writes nothing into HOME"
 
 finish

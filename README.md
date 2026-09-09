@@ -8,13 +8,13 @@ Three flavors build from this one repo:
 
 | Flavor          | Routes through            | Auth                                   |
 |-----------------|---------------------------|----------------------------------------|
-| **`vertex`**    | Vida's **Vertex AI**      | gcloud ADC (`CLAUDE_CODE_USE_VERTEX=1`)|
+| **`vertex`**    | **Vertex AI**             | gcloud ADC (`CLAUDE_CODE_USE_VERTEX=1`)|
 | **`gateway`**   | an **LLM gateway** (LiteLLM) | `apiKeyHelper` + `ANTHROPIC_BASE_URL`  |
 | **`personal`**  | `api.anthropic.com`       | `claude auth login --claudeai` inside the container |
 
 ```sh
-cd ~/vida/dbt
-claude-vertex     # billed through Vida's Vertex project
+cd ~/src/some-repo
+claude-vertex     # billed through your Vertex project
 claude-gateway    # routed through your LLM gateway
 claude-personal   # your own Anthropic account, signed in inside the container
 ```
@@ -94,10 +94,10 @@ instead; ineligible hosts fall through automatically.
 2. **[`just`](https://github.com/casey/just)** — `brew install just`.
 3. **`~/.local/bin` on `PATH`** (or set `BIN_DIR=/usr/local/bin` when installing).
 4. Flavor-specific:
-   - **vertex** — a `@vida.com` Google account with access to the Vertex project
-     `vertex-test-495715` (see Confluence:
-     [Claude Code on Vertex-AI](https://vidahealth.atlassian.net/wiki/spaces/IT/pages/4534337542)).
-     No host `gcloud` install required — the container ships its own.
+   - **vertex** — a Google account with access to a Vertex AI project, and that
+     project's ID (build with `--build-arg VERTEX_PROJECT_ID=…`, or set
+     `ANTHROPIC_VERTEX_PROJECT_ID` in the flavor's env file). No host `gcloud`
+     install required — the container ships its own.
    - **gateway** — your gateway's base URL, plus an Okta **Native app**
      `client_id` + `issuer`. A one-time browser device login mints the token;
      no host helper script is needed (it's baked into the image).
@@ -117,7 +117,7 @@ just install-all    # symlink claude-vertex, claude-gateway, AND claude-personal
 
 ```sh
 just auth           # one-time gcloud login (paste URL into browser, paste code back)
-cd ~/vida/dbt
+cd ~/src/some-repo
 claude-vertex
 ```
 
@@ -132,7 +132,7 @@ FLAVOR=gateway just auth        # seeds ~/.config/claude-container/gateway/env
 $EDITOR ~/.config/claude-container/gateway/env   # set OKTA_CLIENT_ID + ANTHROPIC_BASE_URL
 FLAVOR=gateway just auth        # Okta device login — approve the URL in your browser
 
-cd ~/vida/dbt
+cd ~/src/some-repo
 claude-gateway                  # routed through the gateway
 ```
 
@@ -140,7 +140,7 @@ claude-gateway                  # routed through the gateway
 
 ```sh
 FLAVOR=personal just auth       # claude auth login --claudeai, approved in your host browser
-cd ~/vida/dbt
+cd ~/src/some-repo
 claude-personal                 # your own Anthropic account
 ```
 
@@ -331,7 +331,7 @@ The gateway flavor is a generic Anthropic-format client pointed at your gateway.
 | `ENABLE_TOOL_SEARCH`             | `true`                               | Re-enables MCP tool search, which Claude disables by default against a non-first-party base URL. |
 | `ANTHROPIC_MODEL` + `ANTHROPIC_DEFAULT_*_MODEL` | placeholders (`claude-opus-4-6`, …) | Set to the `model_name` strings your gateway exposes. |
 | `apiKeyHelper`                   | `/opt/claude/api-key-helper`         | Baked Okta helper (`gateway/okta_token_helper.py`, python3-only). Mints/refreshes an Okta **id_token** (JWT); token cache lives in `$STATE_DIR/creds/okta` (bind dir → container `~/.local/share/litellm`). |
-| `OKTA_ISSUER`                    | `https://vida.okta.com`              | Okta **Org** authorization server (no `/oauth2/<id>`). Set in `~/.config/claude-container/gateway/env`. |
+| `OKTA_ISSUER`                    | `https://YOUR-ORG.okta.com`          | Okta **Org** authorization server (no `/oauth2/<id>`). Set in `~/.config/claude-container/gateway/env`. |
 | `OKTA_CLIENT_ID`                 | —                                    | The Okta **Native app** `client_id`; must equal LiteLLM's `JWT_AUDIENCE`. Set in `~/.config/claude-container/gateway/env`. |
 
 **Auth (one-time device login).** `FLAVOR=gateway just auth` runs the baked helper
@@ -342,9 +342,10 @@ on HTTP 401); Claude sends the `id_token` as the bearer. Refresh tokens expire a
 ~7 days idle — re-login with `FLAVOR=gateway just reset-auth` then `just auth`.
 
 **LiteLLM side (outside this repo).** The gateway JWT-validates the Org id_token:
-`JWT_ISSUER=https://vida.okta.com`, `JWT_AUDIENCE=<OKTA_CLIENT_ID>`, JWKS
-`https://vida.okta.com/oauth2/v1/keys`. (Vida's Okta has only the Org server, which
-issues ID tokens — not custom-API access tokens — hence the id_token-as-bearer design.)
+`JWT_ISSUER=https://YOUR-ORG.okta.com`, `JWT_AUDIENCE=<OKTA_CLIENT_ID>`, JWKS
+`https://YOUR-ORG.okta.com/oauth2/v1/keys`. (This assumes an Okta tenant with only
+the Org server, which issues ID tokens — not custom-API access tokens — hence the
+id_token-as-bearer design.)
 
 **Env file (`~/.config/claude-container/gateway/env`).** Holds `OKTA_ISSUER`, `OKTA_CLIENT_ID`,
 `ANTHROPIC_BASE_URL`, and `CLAUDE_CODE_API_KEY_HELPER_TTL_MS`, passed into the
@@ -363,7 +364,7 @@ env file** (`~/.config/claude-container/vertex/env`), passed in via
 | Var                              | Value                     | Where                 |
 |----------------------------------|---------------------------|-----------------------|
 | `CLAUDE_CODE_USE_VERTEX`         | `1`                       | image ENV             |
-| `ANTHROPIC_VERTEX_PROJECT_ID`    | `vertex-test-495715`      | image ENV             |
+| `ANTHROPIC_VERTEX_PROJECT_ID`    | `your-gcp-project`        | image ENV (`--build-arg VERTEX_PROJECT_ID=…`) |
 | `CLOUD_ML_REGION`                | `us`                      | image ENV + env file  |
 | `ANTHROPIC_MODEL`                | `claude-opus-4-8[1m]`     | seeded env file       |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL`   | `claude-opus-4-8[1m]`     | seeded env file       |
@@ -371,10 +372,11 @@ env file** (`~/.config/claude-container/vertex/env`), passed in via
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL`  | `claude-haiku-4-5`        | seeded env file       |
 | `VERTEX_REGION_CLAUDE_HAIKU_4_5` | `us-east5`                | seeded env file       |
 
-**US-only (Vida compliance).** Opus 4.8 + Sonnet 5 aren't served on single
-regions like `us-east5`; they need `global`/multi-region, so they ride the `us`
-multi-region. Haiku 4.5 → `us-east5` via the per-model override (also US). Never
-route to a non-US region.
+**All-US regions.** The seeded pins keep every request in the US, for
+data-residency rules. Opus 4.8 + Sonnet 5 aren't served on single regions like
+`us-east5`; they need `global`/multi-region, so they ride the `us` multi-region.
+Haiku 4.5 → `us-east5` via the per-model override (also US). Change these if your
+own residency rules differ.
 
 **Why pin.** Unpinned on Vertex, the small/fast (background) model defaults to
 `claude-sonnet-4-5` — which `429`s if your project can't invoke it, and it powers
@@ -416,7 +418,7 @@ credential file outright.
 
 Run `/status` inside Claude:
 
-- **vertex** → `API provider: Google Vertex AI`, `GCP project: vertex-test-495715`.
+- **vertex** → `API provider: Google Vertex AI`, `GCP project: <your project ID>`.
   Stronger proof: Google Cloud Console → Logging →
   `resource.type="aiplatform.googleapis.com/Endpoint"` filtered to your email.
 - **gateway** → the base URL should be your gateway, **not** `api.anthropic.com` or
@@ -466,4 +468,4 @@ rm -rf ~/.config/claude-container ~/.local/state/claude-container
 
 ## License
 
-MIT (or whatever Vida prefers for internal tools — update before publishing).
+MIT

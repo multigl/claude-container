@@ -53,21 +53,4 @@ assert_eq "" "$(ls -A "$drh/.local/bin" 2>/dev/null || true)" "dry-run does not 
 assert_eq "absent" "$([[ -d "$drh/.local/bin" ]] && echo present || echo absent)" "dry-run does not mkdir BIN_DIR"
 rm -rf "$drh" "$drbin"
 
-# --- a checkout under the legacy namespace is moved, not re-cloned ---
-# Remote mode (no --local), dry-run, so nothing is fetched or built.
-lp="$(mktemp -d)"; lpbin="$(mktemp -d)"
-for rt in docker podman; do
-    printf '#!/usr/bin/env bash\ncase "$1 $2" in "info "*|"info") exit 0;; esac\nexit 0\n' > "$lpbin/$rt"
-    chmod +x "$lpbin/$rt"
-done
-printf '#!/usr/bin/env bash\n[[ "$1" == "-m" ]] && { echo x86_64; exit 0; }\necho Linux\n' > "$lpbin/uname"
-chmod +x "$lpbin/uname"
-mkdir -p "$lp/.local/share/vida-claude-container/src/.git"
-out="$(env HOME="$lp" PATH="$lpbin:/usr/bin:/bin" bash "$INSTALL" --dry-run 2>&1)"
-assert_contains "$out" "move: $lp/.local/share/vida-claude-container/src" "dry-run plans the legacy checkout move"
-assert_contains "$out" "$lp/.local/share/claude-container/src"            "move targets the new namespace"
-if [[ -d "$lp/.local/share/vida-claude-container/src/.git" ]]; then s=present; else s=gone; fi
-assert_eq "present" "$s" "dry-run does not actually move the checkout"
-rm -rf "$lp" "$lpbin"
-
 finish

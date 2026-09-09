@@ -27,9 +27,10 @@ fl_seed_env() {
 # (overrides the image ENV). Confirm the exact model IDs are enabled in your
 # project's Model Garden.
 #
-# ALL US per Vida compliance: Opus 4.8 + Sonnet 5 aren't served on single
-# regions like us-east5 -- they need global/multi-region, so they ride the "us"
-# multi-region below. Haiku 4.5 -> us-east5 (also US). Never route non-US.
+# All US regions, for data-residency requirements: Opus 4.8 + Sonnet 5 aren't
+# served on single regions like us-east5 -- they need global/multi-region, so
+# they ride the "us" multi-region below. Haiku 4.5 -> us-east5 (also US). Drop
+# these pins if your own residency rules differ.
 #
 # Pinning matters: unpinned on Vertex, the small/fast (background) model defaults
 # to claude-sonnet-4-5, which 429s if your project can't invoke it (it powers
@@ -41,6 +42,7 @@ ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5
 ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
 CLOUD_ML_REGION=us
 VERTEX_REGION_CLAUDE_HAIKU_4_5=us-east5
+# ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project   # overrides the baked image default
 
 EOF
     _env_block_mcp_atlassian

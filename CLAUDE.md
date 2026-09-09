@@ -128,7 +128,7 @@ The `env` file is seeded per-flavor **only when absent** (not by `reseed`), with
 real values, not blanks. The **vertex** flavor seeds model + region pins
 (`ANTHROPIC_MODEL=claude-opus-4-8[1m]`, `…_SONNET_MODEL=claude-sonnet-5`,
 `…_HAIKU_MODEL=claude-haiku-4-5`, `CLOUD_ML_REGION=us`,
-`VERTEX_REGION_CLAUDE_HAIKU_4_5=us-east5`). All US (Vida compliance): opus/sonnet
+`VERTEX_REGION_CLAUDE_HAIKU_4_5=us-east5`). All US, for data residency: opus/sonnet
 on the `us` multi-region, haiku on `us-east5`. Pinning is load-bearing — unpinned,
 the Vertex small/fast model defaults to `claude-sonnet-4-5` (429s if unprovisioned;
 powers background titles + web-search summarization) and the 1M window is lost
@@ -146,28 +146,15 @@ symlinked `~/.claude.json`). Defaults fall back to `~/.config` and
 env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_SETTINGS`);
 state paths follow `XDG_STATE_HOME` only.
 
-`claude-container` renames an earlier per-flavor namespace. `_migrate_namespace`
-(`bin/claude-launcher.sh`) moves each flavor's config and state dirs to the new
-name the first time that flavor launches after upgrading — separately, and only
-when the new path doesn't already exist, so it never overwrites a live dir. A
-failed `mv` (permissions, a busy mount) stops the launcher with the old path
-and a fix-it message rather than continuing with an empty, newly-migrated
-directory. `just doctor` has a `== legacy namespace ==` check that warns if
-either old dir still holds data.
-
 Only `--print-runtime` and `--print-paths` are side-effect-free. Every other
 invocation — including the `doctor-auth` and `reset-auth` subcommands the
 `justfile` delegates to (see "Flavor drivers" below) — runs the full init
-sequence first: `_migrate_namespace`, `mkdir -p` on the config/state dirs,
-`chmod 700` on the state `claude` dir, the legacy `claude.json` relocation,
-and env-file seeding. So `just doctor`'s `== auth ==` section and `just
-reset-auth` can migrate a flavor's whole state tree, not just touch
-credentials — a few lines below, `just doctor`'s `== memory ==` and `==
-legacy namespace ==` sections still read through the side-effect-free
-`--print-paths`, so `doctor` itself mixes both. This is deliberate: a
-genuinely read-only `doctor` would break migration-on-any-invocation, the
-property that keeps a user from silently running against an empty state dir
-right after the rename.
+sequence first: `mkdir -p` on the config/state dirs, `chmod 700` on the state
+`claude` dir, the legacy `claude.json` relocation, and env-file seeding. So
+`just doctor`'s `== auth ==` section and `just reset-auth` can create or
+relocate parts of a flavor's state tree, not just touch credentials — while
+`just doctor`'s `== memory ==` section reads through the side-effect-free
+`--print-paths`, so `doctor` itself mixes both.
 
 ### Memory scoping (per-project + global tier)
 

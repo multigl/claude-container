@@ -21,10 +21,8 @@
 # $XDG_CONFIG_HOME/claude-container/<flavor>/, kept separate from ~/.claude
 # so the host's regular Anthropic-API claude is untouched and the flavors never collide.
 
-# Host-path namespace. NS_LEGACY is the pre-rename value; the launcher migrates
-# a flavor's dirs off it once, on the first launch after this change.
+# Host-path namespace.
 NS="claude-container"
-NS_LEGACY="vida-claude-container"
 
 # Read one key from a flat INI file (strip # comments, trim, split on first =).
 # bash-3.2-safe; not sourced (never executes file contents). Prints the value.
@@ -140,10 +138,10 @@ _env_block_mcp_atlassian() {
     cat <<'EOF'
 # Atlassian MCP credentials.
 # API tokens: https://id.atlassian.com/manage-profile/security/api-tokens
-JIRA_URL=https://vidahealth.atlassian.net
+JIRA_URL=
 JIRA_USERNAME=
 JIRA_API_TOKEN=
-CONFLUENCE_URL=https://vidahealth.atlassian.net/wiki
+CONFLUENCE_URL=
 CONFLUENCE_USERNAME=
 CONFLUENCE_API_TOKEN=
 EOF
@@ -154,32 +152,6 @@ _env_block_mcp_context7() {
 # Context7 MCP. API key: https://context7.com (account -> API key)
 CONTEXT7_API_KEY=
 EOF
-}
-
-# One-time move of a flavor's host dirs off the legacy namespace. Automatic
-# rather than a subcommand: a leftover legacy dir orphans the credentials, both
-# memory tiers and every transcript at once, and the only symptom the user sees
-# is "I appear to be logged out". Per-flavor, so migrating one flavor never
-# touches another. Never overwrites an existing target.
-_migrate_namespace() {  # _migrate_namespace <flavor>
-    local flavor="$1" root new old
-    for root in "${XDG_CONFIG_HOME:-$HOME/.config}" "${XDG_STATE_HOME:-$HOME/.local/state}"; do
-        new="$root/$NS/$flavor"
-        old="$root/$NS_LEGACY/$flavor"
-        if [[ ! -e "$new" && -d "$old" ]]; then
-            mkdir -p "$(dirname "$new")"
-            if mv "$old" "$new"; then
-                echo ">> migrated $old -> $new" >&2
-            else
-                echo "!! failed to migrate $old -> $new" >&2
-                echo "   your credentials and transcripts are still under $old." >&2
-                echo "   fix the permissions (or move it by hand), then re-run." >&2
-                exit 1
-            fi
-        fi
-        rmdir "$root/$NS_LEGACY" 2>/dev/null || true
-    done
-    return 0
 }
 
 # When sourced as a library (tests), define the pure helpers above and stop
@@ -212,8 +184,6 @@ IMAGE="${CLAUDE_IMAGE:-claude-${FLAVOR}:latest}"
 # (machine-managed, disposable) under XDG_STATE_HOME. Per-flavor subdir in each.
 CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/${NS}/${FLAVOR}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${NS}/${FLAVOR}"
-LEGACY_CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/${NS_LEGACY}/${FLAVOR}"
-LEGACY_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${NS_LEGACY}/${FLAVOR}"
 
 # State: the .claude dir (mounted to the container's ~/.claude) + .claude.json.
 # No per-flavor override knob -- relocation follows XDG_STATE_HOME only.
@@ -317,8 +287,6 @@ if [[ "${1:-}" == "--print-paths" ]]; then
 FLAVOR=$FLAVOR
 CFG_DIR=$CFG_DIR
 STATE_DIR=$STATE_DIR
-LEGACY_CFG_DIR=$LEGACY_CFG_DIR
-LEGACY_STATE_DIR=$LEGACY_STATE_DIR
 STATE_CLAUDE_DIR=$STATE_CLAUDE_DIR
 HOST_DOTCLAUDE=$HOST_DOTCLAUDE
 PROJECT_KEY=$PROJECT_KEY
@@ -334,8 +302,6 @@ EOF
     exit 0
 fi
 # ----------------------------------------------------------------------------
-
-_migrate_namespace "$FLAVOR"
 
 mkdir -p "$CFG_DIR" "$STATE_CLAUDE_DIR" "$HOST_PROJECT_DIR"
 # 0700 every launch, not just at creation. This dir holds claude.json with

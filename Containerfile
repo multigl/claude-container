@@ -121,9 +121,8 @@ ENTRYPOINT ["/usr/local/bin/container-entrypoint.sh"]
 CMD ["claude"]
 
 # ---------- vertex flavor ----------
-# Routes through Vida's Vertex AI project (see Confluence: "Claude Code on
-# Vertex-AI"). gcloud ADC auth; env baked so claude-code boots straight into
-# Vertex mode with no interactive /login.
+# Routes through a Google Cloud Vertex AI project. gcloud ADC auth; env baked so
+# claude-code boots straight into Vertex mode with no interactive /login.
 FROM base AS vertex
 
 RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
@@ -133,8 +132,12 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
     && apt-get update && apt-get install -y --no-install-recommends google-cloud-cli \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Placeholder GCP project. Override at build time with
+#   --build-arg VERTEX_PROJECT_ID=my-gcp-project
+# or at runtime by setting ANTHROPIC_VERTEX_PROJECT_ID in the flavor's env file.
+ARG VERTEX_PROJECT_ID=your-gcp-project
 ENV CLAUDE_CODE_USE_VERTEX=1 \
-    ANTHROPIC_VERTEX_PROJECT_ID=vertex-test-495715 \
+    ANTHROPIC_VERTEX_PROJECT_ID=${VERTEX_PROJECT_ID} \
     CLOUD_ML_REGION=us \
     CLAUDE_FLAVOR_NAME=vertex
 # GOOGLE_APPLICATION_CREDENTIALS is exported by the entrypoint at runtime

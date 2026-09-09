@@ -7,7 +7,6 @@ set -euo pipefail
 REPO="multigl/claude-container"
 REF="${CLAUDE_INSTALL_REF:-main}"
 PREFIX="${INSTALL_DIR:-$HOME/.local/share/claude-container/src}"
-LEGACY_PREFIX="$HOME/.local/share/vida-claude-container/src"
 BIN_DIR="${CLAUDE_BIN_DIR:-$HOME/.local/bin}"
 FLAVORS=(vertex)
 LOCAL=0 DRYRUN=0 NO_APPLE_GATE="${CLAUDE_SKIP_APPLE_GATE:-0}"
@@ -57,13 +56,6 @@ fi
 # Clone BEFORE runtime detection so detect_runtime can use the cloned tree's
 # dispatcher (bin/container-runtime.sh) — which is what resolves Apple 'container'.
 if [[ "$LOCAL" != 1 ]]; then
-    # One-time: move a checkout made under the legacy namespace. The installer
-    # re-symlinks the wrappers on every run, so they follow the move.
-    if [[ -d "$LEGACY_PREFIX/.git" && ! -e "$PREFIX" ]]; then
-        if [[ "$DRYRUN" == 1 ]]; then plan "move: $LEGACY_PREFIX -> $PREFIX";
-        else mkdir -p "$(dirname "$PREFIX")" && mv "$LEGACY_PREFIX" "$PREFIX" && say "moved checkout: $LEGACY_PREFIX -> $PREFIX"; fi
-    fi
-
     if [[ "$DRYRUN" == 1 ]]; then plan "fetch: $REPO@$REF -> $PREFIX";
     else
         mkdir -p "$(dirname "$PREFIX")"

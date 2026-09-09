@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Claude Code apiKeyHelper: mint/refresh an Okta OIDC id_token (a JWT) for LiteLLM.
 
-Vida's Okta tenant only has the default Org authorization server, which issues ID
-tokens (no custom-API access tokens). LiteLLM's enable_jwt_auth validates the id_token
+Written for an Okta tenant that has only the default Org authorization server, which
+issues ID tokens (no custom-API access tokens). LiteLLM's enable_jwt_auth validates the id_token
 against the Org JWKS, checks aud == client_id, and maps the `groups` claim to a team.
 Claude Code sends this helper's stdout as the `Authorization: Bearer` value.
 
@@ -21,8 +21,8 @@ auth` runs it once with --login-only to complete the device login. It also runs
 standalone: install to ~/.local/bin/okta-token-helper (chmod 0755) and configure Claude
 Code via ~/.claude/settings.json:
   { "apiKeyHelper": "~/.local/bin/okta-token-helper",
-    "env": { "ANTHROPIC_BASE_URL": "https://litellm.local.sunbeam.network",
-             "OKTA_ISSUER": "https://vida.okta.com",
+    "env": { "ANTHROPIC_BASE_URL": "https://litellm.internal.example.com",
+             "OKTA_ISSUER": "https://YOUR-ORG.okta.com",
              "OKTA_CLIENT_ID": "<native-app-client-id>",
              "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000" } }
 
@@ -34,7 +34,7 @@ non-interactive calls are served from cache / silent refresh. Re-login:
 printing the token to stdout -- used by the interactive `auth` step.
 
 Required environment:
-  OKTA_ISSUER     e.g. https://vida.okta.com   (Org server, no /oauth2/<authServerId>)
+  OKTA_ISSUER     e.g. https://YOUR-ORG.okta.com   (Org server, no /oauth2/<authServerId>)
   OKTA_CLIENT_ID  the Native OIDC app's client_id (must equal LiteLLM JWT_AUDIENCE)
 """
 import argparse
@@ -268,7 +268,7 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     if not ISSUER:
-        die("set OKTA_ISSUER (e.g. https://vida.okta.com)")
+        die("set OKTA_ISSUER (e.g. https://YOUR-ORG.okta.com)")
     if not CLIENT_ID:
         die("set OKTA_CLIENT_ID (Native app client_id == LiteLLM JWT_AUDIENCE)")
 
