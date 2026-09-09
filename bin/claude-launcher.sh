@@ -6,7 +6,9 @@
 #
 # Flavor is chosen by the name this script is invoked as -- symlink it to
 # `claude-vertex` and/or `claude-gateway` -- or forced with CLAUDE_FLAVOR=...
+# Any other name (including `claude-personal`) gets the default flavor, personal.
 #
+#   claude-personal           # run `claude` in $PWD against your Anthropic account
 #   claude-vertex             # run `claude` in $PWD against Vertex
 #   claude-gateway            # run `claude` in $PWD against the gateway
 #   claude-<flavor> shell     # bash inside the container
@@ -161,9 +163,9 @@ EOF
 set -euo pipefail
 
 case "$(basename "$0")" in
+    claude-vertex)   FLAVOR=vertex   ;;
     claude-gateway)  FLAVOR=gateway  ;;
-    claude-personal) FLAVOR=personal ;;
-    *)               FLAVOR=vertex   ;;
+    *)               FLAVOR=personal ;;
 esac
 FLAVOR="${CLAUDE_FLAVOR:-$FLAVOR}"
 

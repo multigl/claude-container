@@ -41,7 +41,7 @@ fl_doctor() {
     if [[ -f "$CRED_PERSONAL_FILE" ]]; then
         echo "  ok: Anthropic credential present ($CRED_PERSONAL_FILE)"
     else
-        echo "  MISSING: run 'FLAVOR=personal just auth'"
+        echo "  MISSING: run 'just auth'"
     fi
     # The mitigation for a plaintext token is the permissions, so check them
     # rather than assume the chmod ran.

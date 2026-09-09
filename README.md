@@ -66,7 +66,8 @@ One-liner (detects OS/arch + runtime, clones, builds, symlinks
 curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash
 ```
 
-Useful flags: `--all` (all three flavors), `--flavor vertex|gateway|personal`,
+With no flags it installs the **personal** flavor (the default). Useful flags:
+`--all` (all three flavors), `--flavor vertex|gateway|personal`,
 `--runtime docker|podman|apple`, `--prefix` / `--bin-dir`, `--ref`, `--dry-run`.
 
 ### Container runtime
@@ -116,10 +117,15 @@ just install-all    # symlink claude-vertex, claude-gateway, AND claude-personal
 ### Vertex
 
 ```sh
-just auth           # one-time gcloud login (paste URL into browser, paste code back)
+FLAVOR=vertex just auth         # one-time gcloud login (paste URL into browser, paste code back)
+$EDITOR ~/.config/claude-container/vertex/env   # set ANTHROPIC_VERTEX_PROJECT_ID
 cd ~/src/some-repo
 claude-vertex
 ```
+
+The project ID is required: the image bakes only a placeholder, so without it
+every request fails. The container prints a loud banner at launch, and
+`FLAVOR=vertex just doctor` reports `MISSING PROJECT`, until it is set.
 
 ### Gateway
 
@@ -138,8 +144,10 @@ claude-gateway                  # routed through the gateway
 
 ### Personal
 
+This is the default flavor, so `just` recipes need no `FLAVOR=` prefix.
+
 ```sh
-FLAVOR=personal just auth       # claude auth login --claudeai, approved in your host browser
+just auth                       # claude auth login --claudeai, approved in your host browser
 cd ~/src/some-repo
 claude-personal                 # your own Anthropic account
 ```
@@ -147,7 +155,7 @@ claude-personal                 # your own Anthropic account
 ## Commands
 
 The wrapper auto-detects flavor from its name. `just` recipes default to
-`FLAVOR=vertex`; prefix `FLAVOR=gateway` to target the gateway flavor.
+`FLAVOR=personal`; prefix `FLAVOR=vertex` or `FLAVOR=gateway` to target another.
 
 | Command                  | What it does                                                |
 |--------------------------|-------------------------------------------------------------|
@@ -364,13 +372,26 @@ env file** (`~/.config/claude-container/vertex/env`), passed in via
 | Var                              | Value                     | Where                 |
 |----------------------------------|---------------------------|-----------------------|
 | `CLAUDE_CODE_USE_VERTEX`         | `1`                       | image ENV             |
-| `ANTHROPIC_VERTEX_PROJECT_ID`    | `your-gcp-project`        | image ENV (`--build-arg VERTEX_PROJECT_ID=…`) |
+| `ANTHROPIC_VERTEX_PROJECT_ID`    | `your-gcp-project` (placeholder — **must be replaced**) | flavor `env` file, or image ENV (`--build-arg VERTEX_PROJECT_ID=…`) |
 | `CLOUD_ML_REGION`                | `us`                      | image ENV + env file  |
 | `ANTHROPIC_MODEL`                | `claude-opus-4-8[1m]`     | seeded env file       |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL`   | `claude-opus-4-8[1m]`     | seeded env file       |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | `claude-sonnet-5`         | seeded env file       |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL`  | `claude-haiku-4-5`        | seeded env file       |
 | `VERTEX_REGION_CLAUDE_HAIKU_4_5` | `us-east5`                | seeded env file       |
+
+**The project ID is required.** The image bakes `your-gcp-project`, a placeholder
+that serves nothing, so a fresh vertex install fails every request until you
+replace it. Two ways to complain about it, so it can't be missed:
+
+- the entrypoint prints a full-width banner on stderr at every launch while the
+  effective `ANTHROPIC_VERTEX_PROJECT_ID` is empty or still a placeholder;
+- `FLAVOR=vertex just doctor` reports `MISSING PROJECT` and names the env file.
+
+Set it in `~/.config/claude-container/vertex/env` (the seeded file has the line
+ready to uncomment) or bake it with `--build-arg VERTEX_PROJECT_ID=…`. If you
+baked it, leave the env-file line **commented** — an empty
+`ANTHROPIC_VERTEX_PROJECT_ID=` there overrides the baked value with nothing.
 
 **All-US regions.** The seeded pins keep every request in the US, for
 data-residency rules. Opus 4.8 + Sonnet 5 aren't served on single regions like

@@ -25,11 +25,11 @@ plan() {  # plan KEY=VAL ...  (HAVE_APPLE, OSTYPE_STUB, ARCH_STUB, MACOS_MAJOR, 
     unset OSTYPE_STUB ARCH_STUB MACOS_MAJOR HAVE_APPLE CLAUDE_SKIP_APPLE_GATE
 }
 
-# Linux, docker present -> plan builds vertex via docker, symlinks wrappers
+# Linux, docker present -> plan builds the default flavor via docker, symlinks wrappers
 out="$(plan OSTYPE_STUB=Linux)"
 assert_contains "$out" "runtime: docker"          "linux dry-run resolves docker"
-assert_contains "$out" "build: vertex"            "dry-run plans vertex build"
-assert_contains "$out" "symlink: claude-vertex"   "dry-run plans wrapper symlink"
+assert_contains "$out" "build: personal"          "dry-run plans the default (personal) build"
+assert_contains "$out" "symlink: claude-personal" "dry-run plans wrapper symlink"
 assert_not_contains "$out" "APPLE GATE"           "linux never apple-gates"
 
 # eligible macOS without apple -> APPLE GATE stop

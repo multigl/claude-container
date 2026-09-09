@@ -27,6 +27,17 @@ fl_seed_env() {
 # (overrides the image ENV). Confirm the exact model IDs are enabled in your
 # project's Model Garden.
 #
+# ============================ REQUIRED: SET THIS =============================
+# The GCP project that serves the models. The image bakes only a placeholder
+# ('your-gcp-project'), so unless you built with --build-arg VERTEX_PROJECT_ID=,
+# uncomment the line below and fill it in -- every request fails without it, and
+# the container prints a loud banner at every launch until you do.
+#
+# Leave it COMMENTED (not empty) if the project is baked into the image: an
+# empty value here would override the baked one with nothing.
+# ANTHROPIC_VERTEX_PROJECT_ID=acme-ai-prod
+# =============================================================================
+#
 # All US regions, for data-residency requirements: Opus 4.8 + Sonnet 5 aren't
 # served on single regions like us-east5 -- they need global/multi-region, so
 # they ride the "us" multi-region below. Haiku 4.5 -> us-east5 (also US). Drop
@@ -42,7 +53,6 @@ ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5
 ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
 CLOUD_ML_REGION=us
 VERTEX_REGION_CLAUDE_HAIKU_4_5=us-east5
-# ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project   # overrides the baked image default
 
 EOF
     _env_block_mcp_atlassian
@@ -55,8 +65,22 @@ fl_doctor() {
     if [[ -f "$CRED_GCLOUD_DIR/application_default_credentials.json" ]]; then
         echo "  ok: ADC credentials present ($CRED_GCLOUD_DIR)"
     else
-        echo "  MISSING ADC: run 'just auth'"
+        echo "  MISSING ADC: run 'FLAVOR=vertex just auth'"
     fi
+    # Host-side half of the project check the entrypoint does on the effective
+    # env. Only the env file is visible from here -- a project baked in with
+    # --build-arg lives in the image -- so an empty value is reported as
+    # "unset here", not as broken.
+    local project=""
+    [[ -f "$HOST_ENV_FILE" ]] &&
+        project="$(sed -n 's/^[[:space:]]*ANTHROPIC_VERTEX_PROJECT_ID=//p' "$HOST_ENV_FILE" | tail -1)"
+    case "$project" in
+        ""|your-gcp-project|your-project|CHANGEME)
+            echo "  MISSING PROJECT: set ANTHROPIC_VERTEX_PROJECT_ID in $HOST_ENV_FILE"
+            echo "                   (ignore if the project was baked in with --build-arg VERTEX_PROJECT_ID=...)"
+            ;;
+        *) echo "  ok: vertex project $project" ;;
+    esac
 }
 
 fl_legacy_volume() { printf 'claude-vertex-gcloud\n'; }

@@ -40,6 +40,12 @@ gpaths="$(
 )"
 assert_contains "$gpaths" "CRED_OKTA_DIR=/x/state/creds/okta" "gateway driver reports the okta cred dir"
 
+# with no CLAUDE_FLAVOR and an unrecognized invocation name, the default is personal
+h="$(mktemp -d)"
+out="$(env -i HOME="$h" PATH="$PATH" bash "$LAUNCHER" --print-paths 2>/dev/null)"
+assert_contains "$out" "FLAVOR=personal" "default flavor is personal"
+rm -rf "$h"
+
 # an explicit unknown flavor is rejected, and the message names the known ones
 h="$(mktemp -d)"
 out="$(env -i HOME="$h" PATH="$PATH" CLAUDE_FLAVOR=nosuch bash "$LAUNCHER" --print-paths 2>&1)"; rc=$?
@@ -84,6 +90,19 @@ h="$(mktemp -d)"
 out="$(env -i HOME="$h" PATH="/usr/bin:/bin" CLAUDE_FLAVOR=vertex bash "$LAUNCHER" doctor-auth 2>&1)"; rc=$?
 assert_eq "0" "$rc" "doctor-auth exits 0 without a container runtime"
 assert_contains "$out" "MISSING ADC" "doctor-auth reports absent ADC credentials"
+# The seeded env file leaves the project commented out, so a fresh install is
+# reported as missing rather than silently 403ing later.
+assert_contains "$out" "MISSING PROJECT" "doctor-auth reports an unset vertex project"
+rm -rf "$h"
+
+# --- doctor-auth reads the vertex project out of the env file ---
+h="$(mktemp -d)"
+envfile="$(env -i HOME="$h" PATH="/usr/bin:/bin" CLAUDE_FLAVOR=vertex bash "$LAUNCHER" --print-paths 2>/dev/null | sed -n 's/^HOST_ENV_FILE=//p')"
+mkdir -p "$(dirname "$envfile")"
+printf 'ANTHROPIC_VERTEX_PROJECT_ID=acme-ai-prod\n' > "$envfile"
+out="$(env -i HOME="$h" PATH="/usr/bin:/bin" CLAUDE_FLAVOR=vertex bash "$LAUNCHER" doctor-auth 2>&1)"
+assert_contains     "$out" "ok: vertex project acme-ai-prod" "doctor-auth reports the configured project"
+assert_not_contains "$out" "MISSING PROJECT"                 "a configured project is not reported missing"
 rm -rf "$h"
 
 # --- personal driver: no extra mount, credential inside the existing one ---

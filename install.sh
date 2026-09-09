@@ -8,13 +8,13 @@ REPO="multigl/claude-container"
 REF="${CLAUDE_INSTALL_REF:-main}"
 PREFIX="${INSTALL_DIR:-$HOME/.local/share/claude-container/src}"
 BIN_DIR="${CLAUDE_BIN_DIR:-$HOME/.local/bin}"
-FLAVORS=(vertex)
+FLAVORS=(personal)
 LOCAL=0 DRYRUN=0 NO_APPLE_GATE="${CLAUDE_SKIP_APPLE_GATE:-0}"
 
 while [[ $# -gt 0 ]]; do case "$1" in
     --local) LOCAL=1; shift ;;
     --dry-run) DRYRUN=1; shift ;;
-    --all) FLAVORS=(vertex gateway personal); shift ;;
+    --all) FLAVORS=(personal vertex gateway); shift ;;
     --flavor) FLAVORS=("$2"); shift 2 ;;
     --runtime) export CLAUDE_RUNTIME="$2"; shift 2 ;;
     --no-apple-gate) NO_APPLE_GATE=1; shift ;;

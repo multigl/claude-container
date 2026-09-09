@@ -58,7 +58,9 @@ The image runs under one of three container runtimes, chosen by a dispatcher —
   (EPERM). Separately, the share **rejects the `chown`/`utimensat` syscalls on the
   mount regardless of uid**, so the entrypoint's explicit mount chowns are
   best-effort (`… 2>/dev/null || true`) and the seed rsync drops time preservation
-  (`--no-times --omit-dir-times`).
+  (`--no-times --omit-dir-times`). The share also rejects `chmod` on the mount
+  root, which is why the seed rsync drops `-p` as well (`--no-perms`) — see
+  "How config seeding works".
 
 `just doctor` has a `== runtime ==` section (resolved runtime + availability).
 `just build`/`build-vertex`/`build-gateway`/`update`/`rebuild-*` all route through
@@ -79,7 +81,8 @@ you to install it + re-run; skip with `--no-apple-gate` or
 the repo, builds the image(s) via the dispatcher, and symlinks `claude-<flavor>`
 into `~/.local/bin`. Flags: `--local` (skip clone; used by `just install`), `--all`,
 `--flavor`, `--runtime`, `--no-apple-gate`, `--prefix`, `--bin-dir`, `--ref`,
-`--dry-run`. `just install` = `install.sh --local --flavor <flavor>`;
+`--dry-run`. With no flavor flag it installs **personal** (the default flavor).
+`just install` = `install.sh --local --flavor <flavor>`;
 `just install-all` = `install.sh --local --all`.
 
 ## How config seeding works
@@ -88,10 +91,19 @@ On first launch `container-entrypoint.sh` copies `/opt/claude-seed` → `~/.clau
 (the host `~/.local/state/claude-container/<flavor>/claude` bind mount) with
 `rsync --ignore-existing`, so user
 edits survive. `CLAUDE_RESEED=1` (via `just reseed`) instead overwrites the seeded
-files (settings + plugins) while preserving history/projects. The `mcpServers`
-block is force-synced from the seed each launch, then `env`/`headers` creds are
-grafted from the host `~/.claude.json` (staged read-only at
-`/opt/claude-stage/host-claude.json`; see "Stage directory" below).
+files (settings + plugins) while preserving history/projects.
+
+The sync deliberately runs with `--no-perms`: `-a` implies `-p`, which chmods
+the destination *root* (`~/.claude`) to the seed dir's `0755` — relaxing a dir
+the launcher keeps at `0700` because it holds `.credentials.json`, and on Apple
+`container` failing the whole sync (exit 23, `failed to set permissions on
+"/home/claude/.claude/."`) because that share rejects chmod on the mount root.
+Without `-p`, new files still land with the seed's mode masked by umask and
+existing files keep theirs.
+
+The `mcpServers` block is force-synced from the seed each launch, then
+`env`/`headers` creds are grafted from the host `~/.claude.json` (staged
+read-only at `/opt/claude-stage/host-claude.json`; see "Stage directory" below).
 
 The container's own `~/.claude.json` (trust/onboarding flags, `mcpServers`, grafted
 creds) is stored at `…/<flavor>/claude/claude.json` — inside the `~/.claude` dir
@@ -208,7 +220,22 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   `build-all`, `install-all`, `uninstall`, …) still name each flavor
   explicitly, so adding a fourth flavor means adding a driver plus a few lines
   to those. An unknown `CLAUDE_FLAVOR` (no matching `bin/flavors/<flavor>.sh`)
-  is a hard error at launch, not a silent fallback to `vertex`.
+  is a hard error at launch, not a silent fallback. The **default flavor is
+  `personal`** — it is what the launcher picks for any invocation name other
+  than `claude-vertex`/`claude-gateway`, what `justfile`'s `flavor` variable
+  defaults to, and what `install.sh` installs with no `--flavor`/`--all`.
+- **Vertex needs a project, loudly.** The image bakes only the placeholder
+  `ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project`, so a fresh vertex install
+  fails every request. Two complaints, deliberately hard to miss:
+  `cr_vertex_project_ok`/`cr_vertex_project_banner` in
+  `bin/container-entrypoint.sh` print a full-width stderr banner at every launch
+  while the *effective* value is empty or a placeholder (checked there because
+  only the container sees image ENV and env file merged), and `fl_doctor` in
+  `bin/flavors/vertex.sh` reports `MISSING PROJECT` from the host-visible env
+  file. Both are warnings, never fatal — `shell` and `auth` have to work on a
+  not-yet-configured container. The seeded env file leaves the line **commented**
+  on purpose: `--env-file` passes an empty `ANTHROPIC_VERTEX_PROJECT_ID=` through
+  and it would override a value baked with `--build-arg VERTEX_PROJECT_ID=`.
 - **Non-root.** Runs as `claude` (uid 1000) — Claude Code refuses
   `bypassPermissions` as root. The entrypoint remaps this user to the host's
   UID/GID so writes into mounts land with host ownership.

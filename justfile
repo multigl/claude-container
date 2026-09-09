@@ -1,4 +1,4 @@
-flavor     := env_var_or_default("FLAVOR", "vertex")
+flavor     := env_var_or_default("FLAVOR", "personal")
 image      := env_var_or_default("IMAGE", "claude-" + flavor + ":latest")
 bin_dir    := env_var_or_default("BIN_DIR", env_var("HOME") + "/.local/bin")
 here       := justfile_directory()
@@ -7,7 +7,7 @@ here       := justfile_directory()
 default:
     @just --list --unsorted
 
-# Build the {{flavor}} image (FLAVOR=vertex|gateway) via the resolved runtime
+# Build the {{flavor}} image (FLAVOR=personal|vertex|gateway) via the resolved runtime
 build:
     {{here}}/bin/container-runtime.sh build --flavor {{flavor}} --image {{image}} --context {{here}}
 

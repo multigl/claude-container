@@ -34,6 +34,40 @@ cr_remap_user() {  # cr_remap_user <current_claude_uid>
     return 0
 }
 
+# Is the Vertex project ID usable? The image bakes a placeholder so the build
+# succeeds without one, so "set" is not the same as "usable" -- an unusable
+# value must be caught here rather than surface later as an opaque 403/404 on
+# the first request. Pure predicate; unit-tested by tests/test_entrypoint_lib.sh.
+cr_vertex_project_ok() {  # cr_vertex_project_ok <project_id>
+    case "${1:-}" in
+        ""|your-gcp-project|your-project|CHANGEME) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# The complaint itself, on stderr, loud enough not to scroll past unnoticed.
+# Separate from the predicate so the text is testable without a container.
+cr_vertex_project_banner() {  # cr_vertex_project_banner <project_id>
+    local shown="${1:-<unset>}"
+    cat >&2 <<EOF
+
+!! ============================================================================
+!! VERTEX PROJECT NOT SET -- every request to Vertex AI will fail.
+!!
+!! ANTHROPIC_VERTEX_PROJECT_ID is ${shown} -- not a real GCP project.
+!!
+!! Fix it on the HOST, then start a new session (the env file is read once, at
+!! container start):
+!!
+!!   edit ~/.config/claude-container/vertex/env   (or \$XDG_CONFIG_HOME/...)
+!!   ANTHROPIC_VERTEX_PROJECT_ID=acme-ai-prod
+!!
+!! Check it with: FLAVOR=vertex just doctor
+!! ============================================================================
+
+EOF
+}
+
 # Deep-merge the host's env/headers sub-blocks (MCP credentials) into the
 # container's mcpServers entries that already exist; host wins on conflict;
 # host-only servers are ignored; command paths stay the container's. Pure jq
@@ -135,6 +169,11 @@ GCLOUD_DIR=/home/claude/.config/gcloud
 # via the apiKeyHelper bind-mounted at /opt/claude/api-key-helper instead.
 if [[ -n "${CLAUDE_CODE_USE_VERTEX:-}" ]]; then
     export GOOGLE_APPLICATION_CREDENTIALS="${GOOGLE_APPLICATION_CREDENTIALS:-${GCLOUD_DIR}/application_default_credentials.json}"
+    # Warn, don't abort: `shell` and `auth` still need to work on a container
+    # whose project isn't configured yet, and the session is where the user
+    # reads the fix.
+    cr_vertex_project_ok "${ANTHROPIC_VERTEX_PROJECT_ID:-}" \
+        || cr_vertex_project_banner "${ANTHROPIC_VERTEX_PROJECT_ID:-}"
 fi
 export HOME=/home/claude
 
@@ -202,9 +241,17 @@ if [[ -d "$SEED" ]]; then
         # --no-times/--omit-dir-times: Apple `container`'s VM file share rejects
         # utimensat on the bind mount (EPERM), which `-a` (implies -t) would hit,
         # failing the whole sync (exit 23) under set -e. Seed mtimes are irrelevant
-        # (--ignore-existing keys on name, not time), so drop time preservation;
-        # perms/symlinks/recursion still apply and work on the file share.
-        gosu claude rsync -a --no-times --omit-dir-times "${rsync_mode[@]}" \
+        # (--ignore-existing keys on name, not time), so drop time preservation.
+        #
+        # --no-perms: `-a` implies -p, which makes rsync chmod the destination
+        # ROOT ($DEST, i.e. ~/.claude) to the seed dir's 0755. Wrong twice over:
+        # the launcher deliberately keeps that dir 0700 (it holds
+        # .credentials.json on the personal flavor), and Apple `container`'s
+        # share rejects chmod on the mount root outright, failing the whole sync
+        # with `failed to set permissions on "/home/claude/.claude/."` (exit 23).
+        # Without -p, new files land with the seed's mode masked by umask and
+        # existing files keep theirs -- all the seed needs.
+        gosu claude rsync -a --no-perms --no-times --omit-dir-times "${rsync_mode[@]}" \
             --exclude=dotclaude.json \
             "$SEED"/ "$DEST"/
     else

@@ -85,4 +85,25 @@ printf '# Memory index\n\n_(none yet)_\n' > "$work/gmem-empty.md"
 assert_eq "_(none yet)_" "$(cr_render_global_index "$work/gmem-empty.md")" "index: no bullets -> placeholder"
 assert_eq "_(none yet)_" "$(cr_render_global_index "$work/does-not-exist.md")" "index: missing file -> placeholder"
 
+# --- cr_vertex_project_ok / cr_vertex_project_banner -------------------------
+# The image bakes a placeholder project, so the predicate has to reject the
+# placeholders as well as the empty value.
+for bad in "" "your-gcp-project" "your-project" "CHANGEME"; do
+    if cr_vertex_project_ok "$bad"; then v=accepted; else v=rejected; fi
+    assert_eq "rejected" "$v" "vertex project: '${bad:-<unset>}' rejected"
+done
+for good in "acme-ai-prod" "my-gcp-project" "proj-1234"; do
+    if cr_vertex_project_ok "$good"; then v=accepted; else v=rejected; fi
+    assert_eq "accepted" "$v" "vertex project: '$good' accepted"
+done
+
+# The banner goes to stderr (stdout is the session), names the offending value,
+# and says where to fix it.
+banner="$(cr_vertex_project_banner "your-gcp-project" 2>&1 >/dev/null)"
+assert_contains "$banner" "VERTEX PROJECT NOT SET"              "banner: shouts the problem"
+assert_contains "$banner" "your-gcp-project"                    "banner: names the bad value"
+assert_contains "$banner" "claude-container/vertex/env"         "banner: names the file to edit"
+assert_eq "" "$(cr_vertex_project_banner "your-gcp-project" 2>/dev/null)" "banner: nothing on stdout"
+assert_contains "$(cr_vertex_project_banner "" 2>&1 >/dev/null)" "<unset>" "banner: unset renders as <unset>"
+
 finish

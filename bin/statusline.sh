@@ -30,12 +30,14 @@ else
   suffix=$(printf "\033[2m%s\033[0m" "$model")
 fi
 
-# Flavor badge: baked per-image as CLAUDE_FLAVOR_NAME. vertex=green, gateway=magenta.
+# Flavor badge: baked per-image as CLAUDE_FLAVOR_NAME. vertex=green,
+# gateway=magenta, personal=cyan.
 case "$CLAUDE_FLAVOR_NAME" in
-  vertex)  badge=$(printf "\033[1;32m[%s]\033[0m " "$CLAUDE_FLAVOR_NAME") ;;
-  gateway) badge=$(printf "\033[1;35m[%s]\033[0m " "$CLAUDE_FLAVOR_NAME") ;;
-  ?*)      badge=$(printf "\033[1m[%s]\033[0m " "$CLAUDE_FLAVOR_NAME") ;;
-  *)       badge="" ;;
+  vertex)   badge=$(printf "\033[1;32m[%s]\033[0m " "$CLAUDE_FLAVOR_NAME") ;;
+  gateway)  badge=$(printf "\033[1;35m[%s]\033[0m " "$CLAUDE_FLAVOR_NAME") ;;
+  personal) badge=$(printf "\033[1;36m[%s]\033[0m " "$CLAUDE_FLAVOR_NAME") ;;
+  ?*)       badge=$(printf "\033[1m[%s]\033[0m " "$CLAUDE_FLAVOR_NAME") ;;
+  *)        badge="" ;;
 esac
 
 printf "%s%s  %s\n" "$badge" "$dir_git" "$suffix"
