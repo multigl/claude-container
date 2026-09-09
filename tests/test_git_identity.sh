@@ -44,7 +44,7 @@ STUB
     rm -rf "$bin" "$rec"
 }
 
-mkcfg() { local h; h="$(mktemp -d)"; mkdir -p "$h/.config/vida-claude-container/vertex"; printf '%s' "$h"; }
+mkcfg() { local h; h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"; printf '%s' "$h"; }
 
 # --- name/email only, no signing key ---
 h="$(mkcfg)"

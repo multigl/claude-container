@@ -18,23 +18,23 @@ run_paths() {  # run_paths KEY=VAL...
 # --- XDG unset -> ~/.config + ~/.local/state defaults, vertex flavor ---
 res="$(run_paths CLAUDE_FLAVOR=vertex)"; home="$(head -1 <<<"$res")"; out="$(tail -n +2 <<<"$res")"
 assert_eq "" "$(ls -A "$home" 2>/dev/null)" "no side effects (vertex defaults)"
-assert_contains "$out" "CFG_DIR=$home/.config/vida-claude-container/vertex"       "vertex config default"
-assert_contains "$out" "STATE_DIR=$home/.local/state/vida-claude-container/vertex" "vertex state default"
-assert_contains "$out" "STATE_CLAUDE_DIR=$home/.local/state/vida-claude-container/vertex/claude"        "vertex .claude dir"
-assert_contains "$out" "HOST_DOTCLAUDE=$home/.local/state/vida-claude-container/vertex/claude/claude.json" "vertex .claude.json (inside claude/ dir mount)"
-assert_contains "$out" "CRED_GCLOUD_DIR=$home/.local/state/vida-claude-container/vertex/creds/gcloud" "vertex gcloud cred dir"
-assert_contains "$out" "HOST_SETTINGS=$home/.config/vida-claude-container/vertex/settings.override.json" "vertex override path"
-assert_contains "$out" "HOST_ENV_FILE=$home/.config/vida-claude-container/vertex/env"       "vertex env default"
-assert_contains "$out" "HOST_MOUNTS_FILE=$home/.config/vida-claude-container/vertex/mounts" "vertex mounts default"
-assert_contains "$out" "HOST_LAUNCHER_CONF=$home/.config/vida-claude-container/vertex/launcher.conf" "vertex launcher.conf default"
+assert_contains "$out" "CFG_DIR=$home/.config/claude-container/vertex"       "vertex config default"
+assert_contains "$out" "STATE_DIR=$home/.local/state/claude-container/vertex" "vertex state default"
+assert_contains "$out" "STATE_CLAUDE_DIR=$home/.local/state/claude-container/vertex/claude"        "vertex .claude dir"
+assert_contains "$out" "HOST_DOTCLAUDE=$home/.local/state/claude-container/vertex/claude/claude.json" "vertex .claude.json (inside claude/ dir mount)"
+assert_contains "$out" "CRED_GCLOUD_DIR=$home/.local/state/claude-container/vertex/creds/gcloud" "vertex gcloud cred dir"
+assert_contains "$out" "HOST_SETTINGS=$home/.config/claude-container/vertex/settings.override.json" "vertex override path"
+assert_contains "$out" "HOST_ENV_FILE=$home/.config/claude-container/vertex/env"       "vertex env default"
+assert_contains "$out" "HOST_MOUNTS_FILE=$home/.config/claude-container/vertex/mounts" "vertex mounts default"
+assert_contains "$out" "HOST_LAUNCHER_CONF=$home/.config/claude-container/vertex/launcher.conf" "vertex launcher.conf default"
 assert_contains "$out" "RUNTIME=" "print-paths includes RUNTIME"
 rm -rf "$home"
 
 # --- gateway flavor -> distinct per-flavor dirs ---
 res="$(run_paths CLAUDE_FLAVOR=gateway)"; home="$(head -1 <<<"$res")"; out="$(tail -n +2 <<<"$res")"
-assert_contains "$out" "CFG_DIR=$home/.config/vida-claude-container/gateway"        "gateway config default"
-assert_contains "$out" "STATE_DIR=$home/.local/state/vida-claude-container/gateway" "gateway state default"
-assert_contains "$out" "CRED_OKTA_DIR=$home/.local/state/vida-claude-container/gateway/creds/okta" "gateway okta cred dir"
+assert_contains "$out" "CFG_DIR=$home/.config/claude-container/gateway"        "gateway config default"
+assert_contains "$out" "STATE_DIR=$home/.local/state/claude-container/gateway" "gateway state default"
+assert_contains "$out" "CRED_OKTA_DIR=$home/.local/state/claude-container/gateway/creds/okta" "gateway okta cred dir"
 rm -rf "$home"
 
 # --- --print-runtime resolves the runtime (docker stub present) ---
@@ -47,8 +47,8 @@ rm -rf "$rtbin" "$prhome"
 # --- XDG_CONFIG_HOME / XDG_STATE_HOME honored ---
 res="$(run_paths CLAUDE_FLAVOR=vertex XDG_CONFIG_HOME=/x/cfg XDG_STATE_HOME=/x/state)"
 home="$(head -1 <<<"$res")"; out="$(tail -n +2 <<<"$res")"
-assert_contains "$out" "CFG_DIR=/x/cfg/vida-claude-container/vertex"     "XDG_CONFIG_HOME honored"
-assert_contains "$out" "STATE_DIR=/x/state/vida-claude-container/vertex" "XDG_STATE_HOME honored"
+assert_contains "$out" "CFG_DIR=/x/cfg/claude-container/vertex"     "XDG_CONFIG_HOME honored"
+assert_contains "$out" "STATE_DIR=/x/state/claude-container/vertex" "XDG_STATE_HOME honored"
 rm -rf "$home"
 
 # --- config override env vars redirect their target ---
@@ -66,7 +66,7 @@ res="$(run_paths CLAUDE_FLAVOR=vertex)"; home="$(head -1 <<<"$res")"; out="$(tai
 key="$(sed -n 's/^PROJECT_KEY=//p' <<<"$out")"
 slug="$(printf '%s' "$PWD" | sed 's#/#-#g')"
 assert_contains "$key" "$slug" "project key contains the readable slug of cwd"
-assert_contains "$out" "HOST_PROJECT_DIR=$home/.local/state/vida-claude-container/vertex/projects/$key" "project dir = STATE_DIR/projects/<key>"
+assert_contains "$out" "HOST_PROJECT_DIR=$home/.local/state/claude-container/vertex/projects/$key" "project dir = STATE_DIR/projects/<key>"
 assert_eq "" "$(ls -A "$home" 2>/dev/null)" "no side effects (project key is pure)"
 rm -rf "$home"
 
@@ -99,7 +99,7 @@ seed_env() {  # seed_env FLAVOR  -> prints seeded env-file contents
     printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/docker"; chmod +x "$bin/docker"
     env -i HOME="$home" PATH="$bin:$PATH" CLAUDE_FLAVOR="$flavor" \
         bash "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
-    cat "$home/.config/vida-claude-container/$flavor/env" 2>/dev/null
+    cat "$home/.config/claude-container/$flavor/env" 2>/dev/null
     rm -rf "$home" "$bin"
 }
 
@@ -132,7 +132,7 @@ migrate_run() {  # migrate_run HOME  -> prints merged stdout+stderr
 
 # empty stub -> "nothing to migrate", stub removed
 h="$(mktemp -d)"
-legacy="$h/.local/state/vida-claude-container/vertex/claude/projects/-workspace"
+legacy="$h/.local/state/claude-container/vertex/claude/projects/-workspace"
 mkdir -p "$legacy"
 out="$(migrate_run "$h")"
 assert_contains "$out" "nothing to migrate" "empty legacy stub: nothing to migrate"
@@ -142,14 +142,14 @@ rm -rf "$h"
 
 # real legacy data -> migrated into the per-repo key, source emptied
 h="$(mktemp -d)"
-legacy="$h/.local/state/vida-claude-container/vertex/claude/projects/-workspace"
+legacy="$h/.local/state/claude-container/vertex/claude/projects/-workspace"
 mkdir -p "$legacy/memory"
 printf 'fact\n' > "$legacy/memory/f.md"
 out="$(migrate_run "$h")"
 assert_contains "$out" "migrated" "real legacy data: migrated"
 if [[ -e "$legacy/memory/f.md" ]]; then l=present; else l=gone; fi
 assert_eq "gone" "$l" "legacy source moved out"
-moved="$(find "$h/.local/state/vida-claude-container/vertex/projects" -name f.md 2>/dev/null | head -1)"
+moved="$(find "$h/.local/state/claude-container/vertex/projects" -name f.md 2>/dev/null | head -1)"
 if [[ -n "$moved" ]]; then m=found; else m=missing; fi
 assert_eq "found" "$m" "fact landed under per-repo key"
 rm -rf "$h"
@@ -173,5 +173,122 @@ slout="$(env -i HOME="$lnhome" PATH="$PATH" bash "$lndir/claude-vertex" --print-
 assert_contains "$slout" "RUNTIME=" "launcher works when invoked via symlink"
 assert_not_contains "$slout" "No such file or directory" "symlink invocation finds container-runtime.sh"
 rm -rf "$lnhome" "$lndir"
+
+# --- namespace migration: vida-claude-container -> claude-container ---
+# Sourced directly (CLAUDE_LAUNCHER_LIB=1), so no runtime and no container.
+mig="$(mktemp -d)"
+mkdir -p "$mig/cfg/vida-claude-container/vertex" \
+         "$mig/state/vida-claude-container/vertex/claude" \
+         "$mig/cfg/vida-claude-container/gateway"
+printf 'OKTA_ISSUER=x\n' > "$mig/cfg/vida-claude-container/vertex/env"
+printf '{}\n'            > "$mig/state/vida-claude-container/vertex/claude/claude.json"
+printf 'other\n'         > "$mig/cfg/vida-claude-container/gateway/env"
+(
+  export CLAUDE_LAUNCHER_LIB=1 HOME="$mig" \
+         XDG_CONFIG_HOME="$mig/cfg" XDG_STATE_HOME="$mig/state"
+  source "$LAUNCHER"
+  _migrate_namespace vertex
+) >/dev/null 2>&1
+assert_eq "OKTA_ISSUER=x" "$(cat "$mig/cfg/claude-container/vertex/env" 2>/dev/null)" \
+    "config dir migrated to the new namespace"
+assert_eq "{}" "$(cat "$mig/state/claude-container/vertex/claude/claude.json" 2>/dev/null)" \
+    "state dir migrated to the new namespace"
+if [[ -d "$mig/cfg/vida-claude-container/vertex" ]]; then s=present; else s=gone; fi
+assert_eq "gone" "$s" "legacy vertex config dir moved out"
+assert_eq "other" "$(cat "$mig/cfg/vida-claude-container/gateway/env" 2>/dev/null)" \
+    "migrating vertex leaves gateway's legacy dir alone"
+rm -rf "$mig"
+
+# --- migration never clobbers an existing new-namespace dir ---
+mig2="$(mktemp -d)"
+mkdir -p "$mig2/cfg/vida-claude-container/vertex" "$mig2/cfg/claude-container/vertex"
+printf 'old\n' > "$mig2/cfg/vida-claude-container/vertex/env"
+printf 'new\n' > "$mig2/cfg/claude-container/vertex/env"
+(
+  export CLAUDE_LAUNCHER_LIB=1 HOME="$mig2" \
+         XDG_CONFIG_HOME="$mig2/cfg" XDG_STATE_HOME="$mig2/state"
+  source "$LAUNCHER"
+  _migrate_namespace vertex
+) >/dev/null 2>&1
+assert_eq "new" "$(cat "$mig2/cfg/claude-container/vertex/env" 2>/dev/null)" \
+    "existing new-namespace dir is not overwritten"
+assert_eq "old" "$(cat "$mig2/cfg/vida-claude-container/vertex/env" 2>/dev/null)" \
+    "legacy dir is left in place when the target already exists"
+rm -rf "$mig2"
+
+# --- migration treats an existing but EMPTY new-namespace dir as already-migrated ---
+mig3="$(mktemp -d)"
+mkdir -p "$mig3/cfg/vida-claude-container/vertex" "$mig3/cfg/claude-container/vertex"
+printf 'old\n' > "$mig3/cfg/vida-claude-container/vertex/env"
+(
+  export CLAUDE_LAUNCHER_LIB=1 HOME="$mig3" \
+         XDG_CONFIG_HOME="$mig3/cfg" XDG_STATE_HOME="$mig3/state"
+  source "$LAUNCHER"
+  _migrate_namespace vertex
+) >/dev/null 2>&1
+assert_eq "" "$(ls -A "$mig3/cfg/claude-container/vertex" 2>/dev/null)" \
+    "existing EMPTY new-namespace dir is left empty (treated as already migrated)"
+assert_eq "old" "$(cat "$mig3/cfg/vida-claude-container/vertex/env" 2>/dev/null)" \
+    "legacy dir untouched when new-namespace dir already exists, even empty"
+rm -rf "$mig3"
+
+# --- migration skips a legacy path that is a regular FILE, not a directory ---
+mig4="$(mktemp -d)"
+mkdir -p "$mig4/cfg/vida-claude-container"
+printf 'not a dir\n' > "$mig4/cfg/vida-claude-container/vertex"
+(
+  export CLAUDE_LAUNCHER_LIB=1 HOME="$mig4" \
+         XDG_CONFIG_HOME="$mig4/cfg" XDG_STATE_HOME="$mig4/state"
+  source "$LAUNCHER"
+  _migrate_namespace vertex
+) >/dev/null 2>&1
+if [[ -f "$mig4/cfg/vida-claude-container/vertex" ]]; then s=present; else s=gone; fi
+assert_eq "present" "$s" "legacy path that is a regular file (not a dir) is left alone"
+assert_eq "" "$(ls -A "$mig4/cfg/claude-container" 2>/dev/null)" \
+    "no new-namespace dir created for a non-directory legacy path"
+rm -rf "$mig4"
+
+# --- a failed mv exits non-zero with an actionable message, leaving the legacy
+# --- source untouched, instead of silently falling through to an empty tree ---
+mig5="$(mktemp -d)"
+mkdir -p "$mig5/cfg/vida-claude-container/vertex" "$mig5/cfg/claude-container"
+printf 'secret\n' > "$mig5/cfg/vida-claude-container/vertex/env"
+chmod 555 "$mig5/cfg/claude-container"   # read-only: mv into it must fail
+out5="$(
+    {
+        export CLAUDE_LAUNCHER_LIB=1 HOME="$mig5" \
+               XDG_CONFIG_HOME="$mig5/cfg" XDG_STATE_HOME="$mig5/state"
+        source "$LAUNCHER"
+        _migrate_namespace vertex
+    } 2>&1
+)"
+rc5=$?
+chmod 755 "$mig5/cfg/claude-container"
+assert_eq "1" "$rc5" "a failed migration exits non-zero instead of continuing"
+assert_contains "$out5" "failed to migrate" "a failed migration prints an actionable message"
+assert_eq "secret" "$(cat "$mig5/cfg/vida-claude-container/vertex/env" 2>/dev/null)" \
+    "legacy source is left intact when the migration mv fails"
+rm -rf "$mig5"
+
+# --- $STATE_CLAUDE_DIR is re-tightened to 0700 on every launch ---
+# It holds claude.json with grafted MCP credentials for every flavor, and a
+# plaintext OAuth token for the personal flavor. Same reasoning as the 600
+# re-tighten on the env file: a dir restored from a loose backup must not stay
+# loose. Uses the seed_env stub-docker harness so the launcher runs to the end.
+perm_home="$(mktemp -d)"; perm_bin="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$perm_bin/docker"; chmod +x "$perm_bin/docker"
+mkdir -p "$perm_home/.local/state/claude-container/vertex/claude"
+chmod 777 "$perm_home/.local/state/claude-container/vertex/claude"
+env -i HOME="$perm_home" PATH="$perm_bin:$PATH" CLAUDE_FLAVOR=vertex \
+    bash "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
+mode="$(ls -ld "$perm_home/.local/state/claude-container/vertex/claude" | cut -c1-10)"
+assert_eq "drwx------" "$mode" "pre-existing loose STATE_CLAUDE_DIR is re-tightened to 0700"
+rm -rf "$perm_home" "$perm_bin"
+
+penv="$(seed_env personal)"
+assert_contains "$penv" "CONTEXT7_API_KEY="  "personal env seeds the context7 key"
+assert_not_contains "$penv" "JIRA_URL"        "personal env has no Atlassian block"
+assert_not_contains "$penv" "OKTA_ISSUER"     "personal env has no Okta block"
+assert_not_contains "$penv" "ANTHROPIC_MODEL" "personal env pins no model"
 
 finish

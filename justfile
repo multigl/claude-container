@@ -33,8 +33,12 @@ build-vertex:
 build-gateway:
     {{here}}/bin/container-runtime.sh build --flavor gateway --image claude-gateway:latest --context {{here}}
 
-# Build both images (shared base layer is cached, so the second is cheap)
-build-all: build-vertex build-gateway
+# Build the personal image
+build-personal:
+    {{here}}/bin/container-runtime.sh build --flavor personal --image claude-personal:latest --context {{here}}
+
+# Build all images (shared base layer is cached, so each additional one is cheap)
+build-all: build-vertex build-gateway build-personal
 
 # Rebuild the vertex image without cache (via the resolved runtime)
 rebuild-vertex:
@@ -44,10 +48,15 @@ rebuild-vertex:
 rebuild-gateway:
     {{here}}/bin/container-runtime.sh build --flavor gateway --image claude-gateway:latest --context {{here}} --no-cache
 
-# Rebuild both images from scratch (base built no-cache once, then reused)
+# Rebuild the personal image without cache (via the resolved runtime)
+rebuild-personal:
+    {{here}}/bin/container-runtime.sh build --flavor personal --image claude-personal:latest --context {{here}} --no-cache
+
+# Rebuild all images from scratch (base built no-cache once, then reused)
 rebuild-all:
     {{here}}/bin/container-runtime.sh build --flavor vertex --image claude-vertex:latest --context {{here}} --no-cache
     {{here}}/bin/container-runtime.sh build --flavor gateway --image claude-gateway:latest --context {{here}}
+    {{here}}/bin/container-runtime.sh build --flavor personal --image claude-personal:latest --context {{here}}
 
 # One-time login for {{flavor}} (gcloud ADC, or Okta device login) -> cred bind dir
 auth:
@@ -74,20 +83,17 @@ reseed:
 install:
     {{here}}/install.sh --local --flavor {{flavor}}
 
-# Symlink BOTH flavor commands (claude-vertex + claude-gateway) to the launcher
+# Symlink ALL flavor commands (claude-vertex + claude-gateway + claude-personal) to the launcher
 install-all:
     {{here}}/install.sh --local --all
 
 # Remove the wrapper symlinks
 uninstall:
-    rm -f {{bin_dir}}/claude-vertex {{bin_dir}}/claude-gateway
+    rm -f {{bin_dir}}/claude-vertex {{bin_dir}}/claude-gateway {{bin_dir}}/claude-personal
 
-# Wipe the {{flavor}} credentials (forces re-auth). Creds are bind dirs now.
+# Wipe the {{flavor}} credentials (forces re-auth). Paths come from the flavor driver.
 reset-auth:
-    @paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh --print-paths)"; \
-        g="$(printf '%s\n' "$paths" | sed -n 's/^CRED_GCLOUD_DIR=//p')"; \
-        o="$(printf '%s\n' "$paths" | sed -n 's/^CRED_OKTA_DIR=//p')"; \
-        if [ "{{flavor}}" = vertex ]; then rm -rf "$g" && echo "wiped $g"; else rm -rf "$o" && echo "wiped $o"; fi
+    @CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh reset-auth
 
 # Remove the {{flavor}} image (via the resolved runtime)
 clean:
@@ -107,20 +113,7 @@ doctor:
         elif $bin image inspect {{image}} >/dev/null 2>&1; then echo "  ok: {{image}} present"; \
         else echo "  MISSING: run 'just build' (FLAVOR={{flavor}})"; fi
     @echo "== auth ({{flavor}}) =="
-    @paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh --print-paths)"; \
-        if [ "{{flavor}}" = vertex ]; then \
-            d="$(printf '%s\n' "$paths" | sed -n 's/^CRED_GCLOUD_DIR=//p')"; \
-            if [ -f "$d/application_default_credentials.json" ]; then echo "  ok: ADC credentials present ($d)"; \
-            else echo "  MISSING ADC: run 'just auth'"; fi; \
-        else \
-            d="$(printf '%s\n' "$paths" | sed -n 's/^CRED_OKTA_DIR=//p')"; \
-            if [ -n "$(ls -A "$d" 2>/dev/null)" ]; then echo "  ok: Okta token cache present ($d)"; \
-            else echo "  MISSING: run 'FLAVOR=gateway just auth'"; fi; \
-            env="${XDG_CONFIG_HOME:-$HOME/.config}/vida-claude-container/gateway/env"; \
-            if [ -f "$env" ] && grep -Eq '^OKTA_CLIENT_ID=.+' "$env"; then \
-                echo "  ok: OKTA_CLIENT_ID set in $env"; \
-            else echo "  MISSING: set OKTA_CLIENT_ID in $env"; fi; \
-        fi
+    @CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh doctor-auth
     @echo "== wrapper on PATH =="
     @command -v claude-{{flavor}} >/dev/null \
         && echo "  ok: $(command -v claude-{{flavor}})" \
@@ -133,3 +126,12 @@ doctor:
             echo "  WARN: legacy shared bucket present ($STATE_CLAUDE_DIR/projects/-workspace)"; \
             echo "        run 'claude-{{flavor}} migrate-memory' from the owning repo"; \
         else echo "  ok: no legacy shared bucket"; fi
+    @echo "== legacy namespace =="
+    @paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh --print-paths)"; \
+        lc="$(printf '%s\n' "$paths" | sed -n 's/^LEGACY_CFG_DIR=//p')"; \
+        ls_="$(printf '%s\n' "$paths" | sed -n 's/^LEGACY_STATE_DIR=//p')"; \
+        found=0; \
+        for d in "$lc" "$ls_"; do \
+            if [ -n "$(ls -A "$d" 2>/dev/null)" ]; then echo "  WARN: legacy dir still holds data: $d"; found=1; fi; \
+        done; \
+        [ "$found" = 0 ] && echo "  ok: nothing left under vida-claude-container" || true

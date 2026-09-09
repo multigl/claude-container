@@ -35,7 +35,7 @@ STUB
 
 # --- all host sources present -> all staged, one dir mount, no file mounts ---
 h="$(mktemp -d)"
-cfg="$h/.config/vida-claude-container/vertex"
+cfg="$h/.config/claude-container/vertex"
 mkdir -p "$cfg" "$h/.claude"
 printf '{"model":"x"}\n'      > "$cfg/settings.override.json"
 printf '{"mcpServers":{}}\n' > "$h/.claude.json"
@@ -60,7 +60,7 @@ rm -rf "$h" "$rec"
 
 # --- optional sources absent -> those stage entries absent (no crash) ---
 h="$(mktemp -d)"
-mkdir -p "$h/.config/vida-claude-container/vertex"   # no override, no host claude.json, no statusline
+mkdir -p "$h/.config/claude-container/vertex"   # no override, no host claude.json, no statusline
 rec="$(run_launch "$h")"
 argv="$(cat "$rec/argv" 2>/dev/null)"
 ls="$(cat "$rec/stage-ls" 2>/dev/null)"
@@ -72,16 +72,16 @@ rm -rf "$h" "$rec"
 
 # --- stage dir is cleaned up after the run (no .stage.* left behind) ---
 h="$(mktemp -d)"
-mkdir -p "$h/.config/vida-claude-container/vertex"
+mkdir -p "$h/.config/claude-container/vertex"
 rec="$(run_launch "$h")"
-leftovers="$(ls -A "$h/.local/state/vida-claude-container/vertex/" 2>/dev/null | grep '^\.stage\.' || true)"
+leftovers="$(ls -A "$h/.local/state/claude-container/vertex/" 2>/dev/null | grep '^\.stage\.' || true)"
 assert_eq "" "$leftovers" "stage dir removed after run"
 rm -rf "$h" "$rec"
 
 # --- rw .claude.json migration: old $STATE_DIR/claude.json -> claude/claude.json ---
 h="$(mktemp -d)"
-state="$h/.local/state/vida-claude-container/vertex"
-mkdir -p "$state" "$h/.config/vida-claude-container/vertex"
+state="$h/.local/state/claude-container/vertex"
+mkdir -p "$state" "$h/.config/claude-container/vertex"
 printf '{"legacy":true}\n' > "$state/claude.json"     # old sibling location
 rec="$(run_launch "$h")"
 if [[ -f "$state/claude/claude.json" ]] && grep -q legacy "$state/claude/claude.json"; then
@@ -97,7 +97,7 @@ perms() { stat -c '%a' "$2" 2>/dev/null || stat -f '%Lp' "$2"; }
 # The chmod used to run only when the file was first seeded, so a file left
 # world/group-readable (bad umask, a 644 restore) kept leaking MCP tokens.
 h="$(mktemp -d)"
-cfg="$h/.config/vida-claude-container/vertex"
+cfg="$h/.config/claude-container/vertex"
 mkdir -p "$cfg"
 printf 'JIRA_API_TOKEN=secret\n' > "$cfg/env"
 chmod 644 "$cfg/env"
@@ -110,8 +110,8 @@ rm -rf "$h" "$rec"
 # leaves earlier ones (holding host ~/.claude.json + git identity) behind. A boot
 # sweep removes those older than a day, sparing a concurrent sibling's fresh one.
 h="$(mktemp -d)"
-state="$h/.local/state/vida-claude-container/vertex"
-mkdir -p "$state" "$h/.config/vida-claude-container/vertex"
+state="$h/.local/state/claude-container/vertex"
+mkdir -p "$state" "$h/.config/claude-container/vertex"
 mkdir -p "$state/.stage.stale" "$state/.stage.fresh"
 touch -t 202001010000 "$state/.stage.stale"      # 2 days+ old -> swept
 rec="$(run_launch "$h")"

@@ -5,16 +5,19 @@ Guidance for Claude Code when working in this repo.
 ## What this is
 
 A **containerized Claude Code** distribution. It builds Claude Code into a Docker
-image and runs it against a non-Anthropic-API backend, isolated from the host's
-own `claude`, gcloud, and shell config. Two **flavors** build from one repo:
+image and runs it, isolated from the host's own `claude`, gcloud, and shell
+config. Three **flavors** build from one repo:
 
-| Flavor    | Routes through          | Auth                                    |
-|-----------|-------------------------|-----------------------------------------|
-| `vertex`  | Vertex AI               | gcloud ADC (`CLAUDE_CODE_USE_VERTEX=1`) |
-| `gateway` | an LLM gateway (LiteLLM)| baked Okta `apiKeyHelper` + `ANTHROPIC_BASE_URL` |
+| Flavor     | Routes through           | Auth                                    |
+|------------|---------------------------|-----------------------------------------|
+| `vertex`   | Vertex AI                | gcloud ADC (`CLAUDE_CODE_USE_VERTEX=1`) |
+| `gateway`  | an LLM gateway (LiteLLM) | baked Okta `apiKeyHelper` + `ANTHROPIC_BASE_URL` |
+| `personal` | `api.anthropic.com`      | `claude auth login --claudeai`, inside the container |
 
-The host's regular `claude` (public Anthropic API) is never touched; each flavor
-keeps its own state under `~/.local/state/vida-claude-container/<flavor>/claude/`.
+The host's regular `claude` is never touched — `personal` also talks to the
+public Anthropic API, but from inside the container, under its own signed-in
+account and its own state. Each flavor keeps its own state under
+`~/.local/state/claude-container/<flavor>/claude/`.
 
 ## Container runtime
 
@@ -82,7 +85,7 @@ into `~/.local/bin`. Flags: `--local` (skip clone; used by `just install`), `--a
 ## How config seeding works
 
 On first launch `container-entrypoint.sh` copies `/opt/claude-seed` → `~/.claude`
-(the host `~/.local/state/vida-claude-container/<flavor>/claude` bind mount) with
+(the host `~/.local/state/claude-container/<flavor>/claude` bind mount) with
 `rsync --ignore-existing`, so user
 edits survive. `CLAUDE_RESEED=1` (via `just reseed`) instead overwrites the seeded
 files (settings + plugins) while preserving history/projects. The `mcpServers`
@@ -93,9 +96,18 @@ grafted from the host `~/.claude.json` (staged read-only at
 The container's own `~/.claude.json` (trust/onboarding flags, `mcpServers`, grafted
 creds) is stored at `…/<flavor>/claude/claude.json` — inside the `~/.claude` dir
 mount — and the entrypoint symlinks `~/.claude.json` to it. It is **not** a
-credential store in these flavors (vertex uses gcloud ADC, gateway the Okta
-apiKeyHelper); a future `/login` OAuth flavor would change that. Old installs with
-a sibling `…/<flavor>/claude.json` are auto-migrated into `claude/` on next launch.
+credential store in any flavor, including personal: `claude auth login
+--claudeai` writes its OAuth token to a separate file,
+`~/.claude/.credentials.json`, not to `claude.json`. Old installs with a
+sibling `…/<flavor>/claude.json` are auto-migrated into `claude/` on next launch.
+
+The `~/.claude.json` symlink is safe against Claude Code's own writes: its
+atomic file writer has an `allowSymlink` path that reads the link's target and
+writes the real file there (it logs "Writing through symlink"), and where
+symlinks aren't allowed it throws rather than replacing the link with a plain
+file — confirmed by reading the pinned claude-code binary. The file that must
+never be symlinked is `.credentials.json`: Claude Code opens it `O_NOFOLLOW`,
+so a symlink there is refused outright rather than followed.
 
 ### Stage directory (no single-file bind mounts)
 
@@ -124,15 +136,38 @@ powers background titles + web-search summarization) and the 1M window is lost
 live env file — `reseed` won't rewrite it. Env is read once at container start, so
 an edit needs a session kill+reopen.
 
-Host-side wrapper files live in an XDG split (namespace `vida-claude-container`):
-config the user hand-edits under `$XDG_CONFIG_HOME/vida-claude-container/<flavor>/`
+Host-side wrapper files live in an XDG split (namespace `claude-container`):
+config the user hand-edits under `$XDG_CONFIG_HOME/claude-container/<flavor>/`
 (`env`, `mounts`, `launcher.conf`, `settings.override.json`), and machine-managed state
-under `$XDG_STATE_HOME/vida-claude-container/<flavor>/` (`claude/` → the container's
+under `$XDG_STATE_HOME/claude-container/<flavor>/` (`claude/` → the container's
 `~/.claude`, which now also holds `claude/claude.json` → the container's
 symlinked `~/.claude.json`). Defaults fall back to `~/.config` and
 `~/.local/state` when the XDG vars are unset. Only config files have escape-hatch
 env-var overrides (`CLAUDE_ENV_FILE`, `CLAUDE_MOUNTS_FILE`, `CLAUDE_SETTINGS`);
 state paths follow `XDG_STATE_HOME` only.
+
+`claude-container` renames an earlier per-flavor namespace. `_migrate_namespace`
+(`bin/claude-launcher.sh`) moves each flavor's config and state dirs to the new
+name the first time that flavor launches after upgrading — separately, and only
+when the new path doesn't already exist, so it never overwrites a live dir. A
+failed `mv` (permissions, a busy mount) stops the launcher with the old path
+and a fix-it message rather than continuing with an empty, newly-migrated
+directory. `just doctor` has a `== legacy namespace ==` check that warns if
+either old dir still holds data.
+
+Only `--print-runtime` and `--print-paths` are side-effect-free. Every other
+invocation — including the `doctor-auth` and `reset-auth` subcommands the
+`justfile` delegates to (see "Flavor drivers" below) — runs the full init
+sequence first: `_migrate_namespace`, `mkdir -p` on the config/state dirs,
+`chmod 700` on the state `claude` dir, the legacy `claude.json` relocation,
+and env-file seeding. So `just doctor`'s `== auth ==` section and `just
+reset-auth` can migrate a flavor's whole state tree, not just touch
+credentials — a few lines below, `just doctor`'s `== memory ==` and `==
+legacy namespace ==` sections still read through the side-effect-free
+`--print-paths`, so `doctor` itself mixes both. This is deliberate: a
+genuinely read-only `doctor` would break migration-on-any-invocation, the
+property that keeps a user from silently running against an empty state dir
+right after the rename.
 
 ### Memory scoping (per-project + global tier)
 
@@ -168,12 +203,31 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
 
 ## Conventions & gotchas
 
+- **Flavor drivers.** All flavor divergence lives in `bin/flavors/<flavor>.sh`
+  — mirroring how `bin/container-runtime.sh` splits runtime divergence into
+  `bin/runtimes/{docker,podman,apple}.sh`. `bin/claude-launcher.sh` sources the
+  driver named by `$FLAVOR` and calls eight functions on it: `fl_cred_dirs`
+  (directories to `mkdir -p` and bind-mount), `fl_cred_paths` (what
+  `reset-auth` deletes), `fl_run_flags` (extra `-v`/`-e` flags for the
+  container run), `fl_auth` (the one-time login), `fl_seed_env` (the env file
+  seeded on first launch), `fl_print_paths` (flavor-specific `--print-paths`
+  output), `fl_doctor` (the `== auth ==` block in `just doctor`), and
+  `fl_legacy_volume` (the old named cred volume `migrate-creds` copies from, or
+  empty if the flavor never had one). `bin/claude-launcher.sh` itself never
+  branches on flavor name beyond loading that one driver file, and the
+  `justfile`'s single-flavor recipes (`build`, `auth`, `shell`, `doctor`,
+  `reset-auth`, `reseed`, …) work the same way, driven by `$FLAVOR`. Only the
+  `justfile`'s per-flavor convenience recipes (`build-vertex`, `build-personal`,
+  `build-all`, `install-all`, `uninstall`, …) still name each flavor
+  explicitly, so adding a fourth flavor means adding a driver plus a few lines
+  to those. An unknown `CLAUDE_FLAVOR` (no matching `bin/flavors/<flavor>.sh`)
+  is a hard error at launch, not a silent fallback to `vertex`.
 - **Non-root.** Runs as `claude` (uid 1000) — Claude Code refuses
   `bypassPermissions` as root. The entrypoint remaps this user to the host's
   UID/GID so writes into mounts land with host ownership.
 - **Ephemeral (`<runtime> run --rm`).** Nothing written to the container filesystem
   survives. Persistent state must live in the
-  `~/.local/state/vida-claude-container/<flavor>/claude` bind mount, the host
+  `~/.local/state/claude-container/<flavor>/claude` bind mount, the host
   `claude.json`/config `env` files, or the cred bind dirs (below).
 - **Credentials are host bind dirs, not named volumes.** Auth caches live under
   XDG state: `$STATE_DIR/creds/gcloud` → `~/.config/gcloud` (vertex ADC) and
@@ -190,7 +244,7 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   that env var to pin an exact version). `just doctor` shows the image's version.
 - **Extra host files beyond `$PWD`.** The launcher bind-mounts `$PWD → /workspace`
   only. To expose more host dirs, list them (one path per line) in
-  `~/.config/vida-claude-container/<flavor>/mounts`; each is mounted at
+  `~/.config/claude-container/<flavor>/mounts`; each is mounted at
   `/mnt/approved/<basename>`,
   **read-only** by default (append ` :rw` to a line to allow edits). They are then
   reachable by Claude's native Read/Write/Grep/Bash — no MCP needed, since the
@@ -212,7 +266,7 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   `gh auth setup-git` for HTTPS push.
 - **SSH agent forwarding + SSH commit signing (opt-in).** Enable per run with
   `CLAUDE_FORWARD_SSH=1`, or persist `forward_ssh = true` in
-  `~/.config/vida-claude-container/<flavor>/launcher.conf` (flat INI; env
+  `~/.config/claude-container/<flavor>/launcher.conf` (flat INI; env
   overrides the file). Supported on **macOS + apple `container`** (uses
   `container run --ssh`), **Linux + docker rootful**, and **Linux + podman
   rootless** (both bind-mount `$SSH_AUTH_SOCK`). **macOS + Docker Desktop is

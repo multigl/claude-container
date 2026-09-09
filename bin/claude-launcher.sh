@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Launch Claude Code in a container, in one of two flavors:
-#   vertex  -- routes through Vertex AI       (gcloud ADC auth)
-#   gateway -- routes through an LLM gateway   (apiKeyHelper auth)
+# Launch Claude Code in a container, in one of three flavors:
+#   vertex   -- routes through Vertex AI        (gcloud ADC auth)
+#   gateway  -- routes through an LLM gateway    (apiKeyHelper auth)
+#   personal -- routes through api.anthropic.com (claude auth login --claudeai)
 #
 # Flavor is chosen by the name this script is invoked as -- symlink it to
 # `claude-vertex` and/or `claude-gateway` -- or forced with CLAUDE_FLAVOR=...
@@ -16,80 +17,15 @@
 #   claude-<flavor> -- <args> # pass extra args to `claude`
 #
 # Nothing touches host ~/.zshrc or host ~/.config/gcloud. Per-flavor state lives
-# under $XDG_STATE_HOME/vida-claude-container/<flavor>/ and config under
-# $XDG_CONFIG_HOME/vida-claude-container/<flavor>/, kept separate from ~/.claude
+# under $XDG_STATE_HOME/claude-container/<flavor>/ and config under
+# $XDG_CONFIG_HOME/claude-container/<flavor>/, kept separate from ~/.claude
 # so the host's regular Anthropic-API claude is untouched and the flavors never collide.
-set -euo pipefail
 
-case "$(basename "$0")" in
-    claude-gateway) FLAVOR=gateway ;;
-    *)              FLAVOR=vertex  ;;
-esac
-FLAVOR="${CLAUDE_FLAVOR:-$FLAVOR}"
+# Host-path namespace. NS_LEGACY is the pre-rename value; the launcher migrates
+# a flavor's dirs off it once, on the first launch after this change.
+NS="claude-container"
+NS_LEGACY="vida-claude-container"
 
-# Resolve symlinks so SCRIPT_DIR is the real bin/ even when invoked via a
-# symlink (e.g. ~/.local/bin/claude-vertex -> .../src/bin/claude-launcher.sh).
-# bash-3.2-portable readlink loop -- macOS has no `readlink -f`.
-_src="${BASH_SOURCE[0]}"
-while [[ -h "$_src" ]]; do
-    _dir="$(cd -P "$(dirname "$_src")" && pwd)"
-    _src="$(readlink "$_src")"
-    [[ "$_src" != /* ]] && _src="$_dir/$_src"
-done
-SCRIPT_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
-
-IMAGE="${CLAUDE_IMAGE:-claude-${FLAVOR}:latest}"
-# --- host-side paths (XDG split) --------------------------------------------
-# Config (hand-edited, back-up-able) lives under XDG_CONFIG_HOME; state
-# (machine-managed, disposable) under XDG_STATE_HOME. Per-flavor subdir in each.
-NS="vida-claude-container"
-CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/${NS}/${FLAVOR}"
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${NS}/${FLAVOR}"
-
-# State: the .claude dir (mounted to the container's ~/.claude) + .claude.json.
-# No per-flavor override knob -- relocation follows XDG_STATE_HOME only.
-# claude.json lives INSIDE the .claude dir so it rides that (robust) directory
-# bind mount and the container can symlink ~/.claude.json to it -- avoiding a
-# fragile single-file bind mount (those rot on Docker Desktop macOS across
-# sleep/wake). Migrated from the old sibling $STATE_DIR/claude.json below.
-STATE_CLAUDE_DIR="${STATE_DIR}/claude"
-HOST_DOTCLAUDE="${STATE_CLAUDE_DIR}/claude.json"
-HOST_DOTCLAUDE_LEGACY="${STATE_DIR}/claude.json"
-
-# Per-project isolation. The container always runs at /workspace, so Claude
-# Code's cwd-slug is always "-workspace" and every host repo would otherwise
-# share one memory/history bucket. Key a host dir on the host path so each repo's
-# memory + transcripts stay separate, and bind-mount it over the container's
-# projects/-workspace (below). The key is a readable slug of $PWD PLUS a checksum
-# of the full path: slugifying alone maps both "/" and "-" to "-", so two paths
-# like a/foo-bar/baz and a/foo/bar-baz would collide -- the checksum disambiguates.
-# $PWD (not realpath) so the key matches the path we bind-mount at /workspace.
-_pwd_slug="$(printf '%s' "$PWD" | sed 's#/#-#g')"
-_pwd_hash="$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
-PROJECT_KEY="${_pwd_slug}-${_pwd_hash}"
-HOST_PROJECT_DIR="${STATE_DIR}/projects/${PROJECT_KEY}"
-
-# Credentials as host bind-mount DIRECTORIES (uniform across docker/podman/apple;
-# no `volume` subcommand needed). Replaces the old named volumes.
-CRED_GCLOUD_DIR="${STATE_DIR}/creds/gcloud"   # vertex: gcloud ADC
-CRED_OKTA_DIR="${STATE_DIR}/creds/okta"       # gateway: Okta token cache
-
-# Config: env / mounts / settings override. Each keeps an escape-hatch
-# override env var so it can be pointed into a dotfiles repo. (See README for the
-# mounts-file format and the settings.override.json semantics.)
-HOST_ENV_FILE="${CLAUDE_ENV_FILE:-${CFG_DIR}/env}"
-HOST_MOUNTS_FILE="${CLAUDE_MOUNTS_FILE:-${CFG_DIR}/mounts}"
-HOST_SETTINGS="${CLAUDE_SETTINGS:-${CFG_DIR}/settings.override.json}"
-# launcher.conf: host-side launcher settings (flat INI `key = value`, parsed not
-# sourced). First key: forward_ssh (SSH agent forwarding toggle). No escape-hatch
-# path override -- the per-run env override is CLAUDE_FORWARD_SSH.
-HOST_LAUNCHER_CONF="${CFG_DIR}/launcher.conf"
-
-# Resolve the container runtime (apple>docker>podman; CLAUDE_RUNTIME overrides).
-CR_SOURCED=1 source "$SCRIPT_DIR/container-runtime.sh"
-RUNTIME="$(cr_resolve)"
-
-# --- launcher.conf parsing + SSH-forward policy ------------------------------
 # Read one key from a flat INI file (strip # comments, trim, split on first =).
 # bash-3.2-safe; not sourced (never executes file contents). Prints the value.
 _conf_get() {  # _conf_get KEY FILE
@@ -110,41 +46,6 @@ _is_truthy() {
     case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
         1|true|yes) return 0 ;; *) return 1 ;;
     esac
-}
-
-# Should SSH be forwarded? Precedence: CLAUDE_FORWARD_SSH env > launcher.conf > off.
-_ssh_forward_enabled() {
-    if [[ -n "${CLAUDE_FORWARD_SSH:-}" ]]; then _is_truthy "$CLAUDE_FORWARD_SSH"; return; fi
-    _is_truthy "$(_conf_get forward_ssh "$HOST_LAUNCHER_CONF")"
-}
-
-# Warn about unrecognized keys in launcher.conf. _conf_get's exact-match lookup
-# silently no-ops on a typo -- most likely the env-var spelling (CLAUDE_FORWARD_SSH)
-# used where the ini key (forward_ssh) belongs, since the sibling `env` file uses
-# ALL_CAPS keys and it's an easy mix-up. Without this, forwarding just silently
-# never turns on and there's no signal pointing at the config file as the cause.
-_KNOWN_LAUNCHER_CONF_KEYS=" forward_ssh "
-_conf_warn_unknown_keys() {  # _conf_warn_unknown_keys FILE
-    local file="$1" line k
-    [[ -f "$file" ]] || return 0
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line="${line%%#*}"
-        [[ "$line" == *=* ]] || continue
-        k="${line%%=*}"
-        k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
-        [[ -z "$k" ]] && continue
-        if [[ "$_KNOWN_LAUNCHER_CONF_KEYS" != *" $k "* ]]; then
-            echo ">> launcher.conf: unrecognized key '$k' (known keys: forward_ssh); ignored" >&2
-        fi
-    done < "$file"
-}
-
-# Is forwarding supported on this runtime+OS combo? apple (any mac), or Linux with
-# docker/podman. NOT macOS Docker Desktop (the host-services bridge can't forward
-# the 1Password agent). _cr_is_linux comes from the sourced container-runtime.sh.
-_ssh_combo_supported() {
-    [[ "$RUNTIME" == apple ]] && return 0
-    _cr_is_linux && { [[ "$RUNTIME" == docker || "$RUNTIME" == podman ]]; }
 }
 
 # Resolve a signingkey-shaped value (literal ssh pubkey OR path to one) to a
@@ -232,6 +133,173 @@ _stage_git_identity() {
     printf '[commit]\n    gpgsign = %s\n' "$gpgsign"
 }
 
+# Shared env-file blocks, composed by the flavor drivers' fl_seed_env. Kept here
+# rather than duplicated per driver; the personal flavor deliberately omits the
+# Atlassian block, so this is composition, not a common suffix.
+_env_block_mcp_atlassian() {
+    cat <<'EOF'
+# Atlassian MCP credentials.
+# API tokens: https://id.atlassian.com/manage-profile/security/api-tokens
+JIRA_URL=https://vidahealth.atlassian.net
+JIRA_USERNAME=
+JIRA_API_TOKEN=
+CONFLUENCE_URL=https://vidahealth.atlassian.net/wiki
+CONFLUENCE_USERNAME=
+CONFLUENCE_API_TOKEN=
+EOF
+}
+
+_env_block_mcp_context7() {
+    cat <<'EOF'
+# Context7 MCP. API key: https://context7.com (account -> API key)
+CONTEXT7_API_KEY=
+EOF
+}
+
+# One-time move of a flavor's host dirs off the legacy namespace. Automatic
+# rather than a subcommand: a leftover legacy dir orphans the credentials, both
+# memory tiers and every transcript at once, and the only symptom the user sees
+# is "I appear to be logged out". Per-flavor, so migrating one flavor never
+# touches another. Never overwrites an existing target.
+_migrate_namespace() {  # _migrate_namespace <flavor>
+    local flavor="$1" root new old
+    for root in "${XDG_CONFIG_HOME:-$HOME/.config}" "${XDG_STATE_HOME:-$HOME/.local/state}"; do
+        new="$root/$NS/$flavor"
+        old="$root/$NS_LEGACY/$flavor"
+        if [[ ! -e "$new" && -d "$old" ]]; then
+            mkdir -p "$(dirname "$new")"
+            if mv "$old" "$new"; then
+                echo ">> migrated $old -> $new" >&2
+            else
+                echo "!! failed to migrate $old -> $new" >&2
+                echo "   your credentials and transcripts are still under $old." >&2
+                echo "   fix the permissions (or move it by hand), then re-run." >&2
+                exit 1
+            fi
+        fi
+        rmdir "$root/$NS_LEGACY" 2>/dev/null || true
+    done
+    return 0
+}
+
+# When sourced as a library (tests), define the pure helpers above and stop
+# before any side effect. Same idiom as CLAUDE_ENTRYPOINT_LIB=1 in the entrypoint.
+[[ "${CLAUDE_LAUNCHER_LIB:-}" == 1 ]] && return 0
+
+set -euo pipefail
+
+case "$(basename "$0")" in
+    claude-gateway)  FLAVOR=gateway  ;;
+    claude-personal) FLAVOR=personal ;;
+    *)               FLAVOR=vertex   ;;
+esac
+FLAVOR="${CLAUDE_FLAVOR:-$FLAVOR}"
+
+# Resolve symlinks so SCRIPT_DIR is the real bin/ even when invoked via a
+# symlink (e.g. ~/.local/bin/claude-vertex -> .../src/bin/claude-launcher.sh).
+# bash-3.2-portable readlink loop -- macOS has no `readlink -f`.
+_src="${BASH_SOURCE[0]}"
+while [[ -h "$_src" ]]; do
+    _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
+
+IMAGE="${CLAUDE_IMAGE:-claude-${FLAVOR}:latest}"
+# --- host-side paths (XDG split) --------------------------------------------
+# Config (hand-edited, back-up-able) lives under XDG_CONFIG_HOME; state
+# (machine-managed, disposable) under XDG_STATE_HOME. Per-flavor subdir in each.
+CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/${NS}/${FLAVOR}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${NS}/${FLAVOR}"
+LEGACY_CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/${NS_LEGACY}/${FLAVOR}"
+LEGACY_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${NS_LEGACY}/${FLAVOR}"
+
+# State: the .claude dir (mounted to the container's ~/.claude) + .claude.json.
+# No per-flavor override knob -- relocation follows XDG_STATE_HOME only.
+# claude.json lives INSIDE the .claude dir so it rides that (robust) directory
+# bind mount and the container can symlink ~/.claude.json to it -- avoiding a
+# fragile single-file bind mount (those rot on Docker Desktop macOS across
+# sleep/wake). Migrated from the old sibling $STATE_DIR/claude.json below.
+STATE_CLAUDE_DIR="${STATE_DIR}/claude"
+HOST_DOTCLAUDE="${STATE_CLAUDE_DIR}/claude.json"
+HOST_DOTCLAUDE_LEGACY="${STATE_DIR}/claude.json"
+
+# Per-project isolation. The container always runs at /workspace, so Claude
+# Code's cwd-slug is always "-workspace" and every host repo would otherwise
+# share one memory/history bucket. Key a host dir on the host path so each repo's
+# memory + transcripts stay separate, and bind-mount it over the container's
+# projects/-workspace (below). The key is a readable slug of $PWD PLUS a checksum
+# of the full path: slugifying alone maps both "/" and "-" to "-", so two paths
+# like a/foo-bar/baz and a/foo/bar-baz would collide -- the checksum disambiguates.
+# $PWD (not realpath) so the key matches the path we bind-mount at /workspace.
+_pwd_slug="$(printf '%s' "$PWD" | sed 's#/#-#g')"
+_pwd_hash="$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
+PROJECT_KEY="${_pwd_slug}-${_pwd_hash}"
+HOST_PROJECT_DIR="${STATE_DIR}/projects/${PROJECT_KEY}"
+
+# Config: env / mounts / settings override. Each keeps an escape-hatch
+# override env var so it can be pointed into a dotfiles repo. (See README for the
+# mounts-file format and the settings.override.json semantics.)
+HOST_ENV_FILE="${CLAUDE_ENV_FILE:-${CFG_DIR}/env}"
+HOST_MOUNTS_FILE="${CLAUDE_MOUNTS_FILE:-${CFG_DIR}/mounts}"
+HOST_SETTINGS="${CLAUDE_SETTINGS:-${CFG_DIR}/settings.override.json}"
+# launcher.conf: host-side launcher settings (flat INI `key = value`, parsed not
+# sourced). First key: forward_ssh (SSH agent forwarding toggle). No escape-hatch
+# path override -- the per-run env override is CLAUDE_FORWARD_SSH.
+HOST_LAUNCHER_CONF="${CFG_DIR}/launcher.conf"
+
+# Flavor driver (fl_* functions). Mirrors the runtime dispatcher's driver split.
+# An unknown flavor is fatal here rather than silently landing in some `else`.
+FLAVOR_DRIVER="$SCRIPT_DIR/flavors/${FLAVOR}.sh"
+if [[ ! -r "$FLAVOR_DRIVER" ]]; then
+    echo "!! unknown flavor '$FLAVOR'" >&2
+    echo "   known flavors: $(cd "$SCRIPT_DIR/flavors" 2>/dev/null && ls *.sh 2>/dev/null | sed 's/\.sh$//' | tr '\n' ' ')" >&2
+    exit 2
+fi
+# shellcheck source=/dev/null
+source "$FLAVOR_DRIVER"
+
+# Resolve the container runtime (apple>docker>podman; CLAUDE_RUNTIME overrides).
+CR_SOURCED=1 source "$SCRIPT_DIR/container-runtime.sh"
+RUNTIME="$(cr_resolve)"
+
+# --- launcher.conf parsing + SSH-forward policy ------------------------------
+# Should SSH be forwarded? Precedence: CLAUDE_FORWARD_SSH env > launcher.conf > off.
+_ssh_forward_enabled() {
+    if [[ -n "${CLAUDE_FORWARD_SSH:-}" ]]; then _is_truthy "$CLAUDE_FORWARD_SSH"; return; fi
+    _is_truthy "$(_conf_get forward_ssh "$HOST_LAUNCHER_CONF")"
+}
+
+# Warn about unrecognized keys in launcher.conf. _conf_get's exact-match lookup
+# silently no-ops on a typo -- most likely the env-var spelling (CLAUDE_FORWARD_SSH)
+# used where the ini key (forward_ssh) belongs, since the sibling `env` file uses
+# ALL_CAPS keys and it's an easy mix-up. Without this, forwarding just silently
+# never turns on and there's no signal pointing at the config file as the cause.
+_KNOWN_LAUNCHER_CONF_KEYS=" forward_ssh "
+_conf_warn_unknown_keys() {  # _conf_warn_unknown_keys FILE
+    local file="$1" line k
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        [[ "$line" == *=* ]] || continue
+        k="${line%%=*}"
+        k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
+        [[ -z "$k" ]] && continue
+        if [[ "$_KNOWN_LAUNCHER_CONF_KEYS" != *" $k "* ]]; then
+            echo ">> launcher.conf: unrecognized key '$k' (known keys: forward_ssh); ignored" >&2
+        fi
+    done < "$file"
+}
+
+# Is forwarding supported on this runtime+OS combo? apple (any mac), or Linux with
+# docker/podman. NOT macOS Docker Desktop (the host-services bridge can't forward
+# the 1Password agent). _cr_is_linux comes from the sourced container-runtime.sh.
+_ssh_combo_supported() {
+    [[ "$RUNTIME" == apple ]] && return 0
+    _cr_is_linux && { [[ "$RUNTIME" == docker || "$RUNTIME" == podman ]]; }
+}
+
 # --print-runtime: report the resolved runtime + availability, then exit (no side effects).
 if [[ "${1:-}" == "--print-runtime" ]]; then
     printf 'RUNTIME=%s\n' "$RUNTIME"
@@ -249,12 +317,12 @@ if [[ "${1:-}" == "--print-paths" ]]; then
 FLAVOR=$FLAVOR
 CFG_DIR=$CFG_DIR
 STATE_DIR=$STATE_DIR
+LEGACY_CFG_DIR=$LEGACY_CFG_DIR
+LEGACY_STATE_DIR=$LEGACY_STATE_DIR
 STATE_CLAUDE_DIR=$STATE_CLAUDE_DIR
 HOST_DOTCLAUDE=$HOST_DOTCLAUDE
 PROJECT_KEY=$PROJECT_KEY
 HOST_PROJECT_DIR=$HOST_PROJECT_DIR
-CRED_GCLOUD_DIR=$CRED_GCLOUD_DIR
-CRED_OKTA_DIR=$CRED_OKTA_DIR
 HOST_ENV_FILE=$HOST_ENV_FILE
 HOST_MOUNTS_FILE=$HOST_MOUNTS_FILE
 HOST_SETTINGS=$HOST_SETTINGS
@@ -262,11 +330,20 @@ HOST_LAUNCHER_CONF=$HOST_LAUNCHER_CONF
 IMAGE=$IMAGE
 RUNTIME=$RUNTIME
 EOF
+    fl_print_paths
     exit 0
 fi
 # ----------------------------------------------------------------------------
 
+_migrate_namespace "$FLAVOR"
+
 mkdir -p "$CFG_DIR" "$STATE_CLAUDE_DIR" "$HOST_PROJECT_DIR"
+# 0700 every launch, not just at creation. This dir holds claude.json with
+# grafted MCP credentials for every flavor, and for the personal flavor a
+# plaintext OAuth token that Claude Code refreshes in place. A dir restored from
+# a loose backup, or created under a bad umask, must not stay group/world
+# readable. Same reasoning as the 600 re-tighten on the env file below.
+chmod 700 "$STATE_CLAUDE_DIR"
 # One-time migration: the old sibling $STATE_DIR/claude.json moves inside the
 # .claude dir mount (see HOST_DOTCLAUDE above). Only when the new path is absent,
 # so a real file is never clobbered.
@@ -279,67 +356,15 @@ fi
 # Seed an empty env file with placeholders. User edits in host editor; values
 # are passed to the container via --env-file.
 if [[ ! -f "$HOST_ENV_FILE" ]]; then
-    {
-        if [[ "$FLAVOR" == gateway ]]; then
-            cat <<'EOF'
-# claude-gateway: the baked Okta apiKeyHelper reads these to mint an id_token.
-# OKTA_ISSUER = Vida Org server (no /oauth2/<id>); OKTA_CLIENT_ID = the Native
-# app client_id (must equal LiteLLM's JWT_AUDIENCE). Run `claude-gateway auth`
-# once to complete the browser device login. Passed in via --env-file.
-OKTA_ISSUER=https://vida.okta.com
-OKTA_CLIENT_ID=
-CLAUDE_CODE_API_KEY_HELPER_TTL_MS=300000
-# ANTHROPIC_BASE_URL=https://litellm.local.sunbeam.network   # gateway endpoint override
-
-EOF
-        elif [[ "$FLAVOR" == vertex ]]; then
-            cat <<'EOF'
-# claude-vertex: model + region pins. Passed into the container via --env-file
-# (overrides the image ENV). Confirm the exact model IDs are enabled in your
-# project's Model Garden.
-#
-# ALL US per Vida compliance: Opus 4.8 + Sonnet 5 aren't served on single
-# regions like us-east5 -- they need global/multi-region, so they ride the "us"
-# multi-region below. Haiku 4.5 -> us-east5 (also US). Never route non-US.
-#
-# Pinning matters: unpinned on Vertex, the small/fast (background) model defaults
-# to claude-sonnet-4-5, which 429s if your project can't invoke it (it powers
-# session titles + web-search summarization). Pinning also restores the 1M
-# context window -- append [1m] to a model ID; Sonnet 5 is always 1M (no suffix).
-ANTHROPIC_MODEL=claude-opus-4-8[1m]
-ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]
-ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5
-ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
-CLOUD_ML_REGION=us
-VERTEX_REGION_CLAUDE_HAIKU_4_5=us-east5
-
-EOF
-        fi
-        cat <<'EOF'
-# Credentials + endpoints for MCP servers.
-# Atlassian API tokens: https://id.atlassian.com/manage-profile/security/api-tokens
-# Context7 API key:     https://context7.com (account -> API key)
-JIRA_URL=https://vidahealth.atlassian.net
-JIRA_USERNAME=
-JIRA_API_TOKEN=
-CONFLUENCE_URL=https://vidahealth.atlassian.net/wiki
-CONFLUENCE_USERNAME=
-CONFLUENCE_API_TOKEN=
-CONTEXT7_API_KEY=
-EOF
-    } > "$HOST_ENV_FILE"
+    fl_seed_env > "$HOST_ENV_FILE"
 fi
 # Re-tighten every launch, not just on creation: a pre-existing env file left
 # world/group-readable (a bad umask, a restore from a 644 backup) would otherwise
 # keep leaking the MCP tokens it holds. Guarded so a missing file is a no-op.
 [[ -f "$HOST_ENV_FILE" ]] && chmod 600 "$HOST_ENV_FILE"
 
-# Ensure the flavor's credential directory exists (bind-mounted; see run_in_container).
-if [[ "$FLAVOR" == vertex ]]; then
-    mkdir -p "$CRED_GCLOUD_DIR"
-else
-    mkdir -p "$CRED_OKTA_DIR"
-fi
+# Ensure the flavor's credential directory/directories exist (bind-mounted; see run_in_container).
+while IFS= read -r _d; do [[ -n "$_d" ]] && mkdir -p "$_d"; done < <(fl_cred_dirs)
 
 run_in_container() {
     # Enforce a usable runtime + load its driver (rt_* functions) before any real
@@ -408,12 +433,8 @@ run_in_container() {
     # (Host ~/.claude.json is staged as host-claude.json above so the entrypoint
     # can graft its mcpServers env/headers into the container's ~/.claude.json.)
 
-    # Flavor-specific mounts.
-    if [[ "$FLAVOR" == vertex ]]; then
-        extra_flags+=(-v "$CRED_GCLOUD_DIR:/home/claude/.config/gcloud")
-    else
-        extra_flags+=(-v "$CRED_OKTA_DIR:/home/claude/.local/share/litellm")
-    fi
+    # Flavor-specific mounts (driver-contributed, one token per line).
+    while IFS= read -r _f; do [[ -n "$_f" ]] && extra_flags+=("$_f"); done < <(fl_run_flags)
 
     # Forward the reseed flag so the entrypoint force-overwrites the seeded
     # files (settings + plugins) instead of preserving existing ones.
@@ -488,28 +509,7 @@ run_in_container() {
 
 case "${1:-}" in
     auth)
-        case "$FLAVOR" in
-            vertex)
-                # gcloud Application Default Credentials login. --no-launch-browser
-                # prints a URL; paste it in your host browser, then paste the
-                # verification code back. Creds persist in the volume.
-                echo ">> running 'gcloud auth application-default login --no-launch-browser' inside container"
-                run_in_container gcloud auth application-default login --no-launch-browser
-                echo ">> done. credentials saved to $CRED_GCLOUD_DIR"
-                ;;
-            gateway)
-                # Okta device-authorization login. The baked helper prints a
-                # verification URL to stderr; approve it in your host browser.
-                # --login-only populates the token cache without emitting a token.
-                echo ">> Okta device login inside container (approve in your browser)"
-                run_in_container /opt/claude/api-key-helper --login-only
-                echo ">> done. token cache saved to $CRED_OKTA_DIR"
-                ;;
-            *)
-                echo "auth: not applicable for the '$FLAVOR' flavor." >&2
-                exit 1
-                ;;
-        esac
+        fl_auth
         ;;
     reseed)
         # Re-copy the image's seed payload (settings.json + plugins) over the
@@ -547,12 +547,37 @@ case "${1:-}" in
         mv "$_legacy" "$HOST_PROJECT_DIR"
         echo ">> migrated $_legacy -> $HOST_PROJECT_DIR"
         ;;
+    reset-auth)
+        # Host-side. Wipes whatever this flavor's driver calls a credential,
+        # forcing a re-auth. No container runtime required. A removal failure
+        # (permission denied, busy mount, etc.) must not be reported as
+        # "wiped" -- this command's whole job is guaranteeing the credential
+        # is gone, so a silent no-op here is worse than a loud one.
+        _reset_auth_rc=0
+        while IFS= read -r _p; do
+            [[ -n "$_p" && -e "$_p" ]] || continue
+            if rm -rf "$_p"; then
+                echo ">> wiped $_p"
+            else
+                echo ">> failed to remove $_p" >&2
+                _reset_auth_rc=1
+            fi
+        done < <(fl_cred_paths)
+        exit "$_reset_auth_rc"
+        ;;
+    doctor-auth)
+        # Host-side. Emits the `== auth ==` lines for `just doctor`.
+        fl_doctor
+        ;;
     migrate-creds)
         # One-time: copy an old named docker/podman volume's contents into the new
         # bind dir. Requires the runtime CLI; apple never used volumes. No-op if
         # the volume is absent or the target already has data.
-        _vol=""; _dir=""
-        if [[ "$FLAVOR" == vertex ]]; then _vol="claude-vertex-gcloud"; _dir="$CRED_GCLOUD_DIR"; else _vol="claude-gateway-okta"; _dir="$CRED_OKTA_DIR"; fi
+        _vol="$(fl_legacy_volume)"
+        _dir="$(fl_cred_dirs | head -1)"
+        if [[ -z "$_vol" || -z "$_dir" ]]; then
+            echo ">> migrate-creds: not applicable for the '$FLAVOR' flavor"; exit 0
+        fi
         mkdir -p "$_dir"
         if [[ -n "$(ls -A "$_dir" 2>/dev/null)" ]]; then
             echo ">> $_dir already populated; nothing to migrate"; exit 0

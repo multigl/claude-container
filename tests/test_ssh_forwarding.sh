@@ -37,21 +37,21 @@ STUB
 }
 
 # --- toggle OFF (default) -> no ssh flags ---
-h="$(mktemp -d)"; mkdir -p "$h/.config/vida-claude-container/vertex"
+h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"
 argv="$(run_ssh Linux docker "$h" SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_not_contains "$argv" "/ssh-agent" "toggle off: no socket bind"
 assert_contains "$argv" "claude-vertex:latest" "toggle off: launcher reached rt_run"
 rm -rf "$h"
 
 # --- env override ON, linux+docker -> socket flags ---
-h="$(mktemp -d)"; mkdir -p "$h/.config/vida-claude-container/vertex"
+h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"
 argv="$(run_ssh Linux docker "$h" CLAUDE_FORWARD_SSH=1 SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_contains "$argv" "/tmp/a.sock:/ssh-agent"   "env on linux+docker: socket bound"
 assert_contains "$argv" "SSH_AUTH_SOCK=/ssh-agent" "env on linux+docker: container SSH_AUTH_SOCK set"
 rm -rf "$h"
 
 # --- enabled + supported but no agent socket -> warn + skip (no socket flags) ---
-h="$(mktemp -d)"; mkdir -p "$h/.config/vida-claude-container/vertex"
+h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"
 argv="$(run_ssh Linux docker "$h" CLAUDE_FORWARD_SSH=1)"
 assert_not_contains "$argv" "/ssh-agent"                        "no-agent: no socket bind"
 assert_contains "$argv" "SSH_AUTH_SOCK is unset"               "no-agent: warns it was skipped"
@@ -59,14 +59,14 @@ assert_contains "$argv" "claude-vertex:latest"                 "no-agent: launch
 rm -rf "$h"
 
 # --- env override ON, linux+podman -> socket flags ---
-h="$(mktemp -d)"; mkdir -p "$h/.config/vida-claude-container/vertex"
+h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"
 argv="$(run_ssh Linux podman "$h" CLAUDE_FORWARD_SSH=1 SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_contains "$argv" "/tmp/a.sock:/ssh-agent" "linux+podman: socket bound"
 assert_contains "$argv" "claude-vertex:latest"   "linux+podman: launcher reached rt_run"
 rm -rf "$h"
 
 # --- launcher.conf forward_ssh=true, linux+docker -> socket flags ---
-h="$(mktemp -d)"; cfg="$h/.config/vida-claude-container/vertex"; mkdir -p "$cfg"
+h="$(mktemp -d)"; cfg="$h/.config/claude-container/vertex"; mkdir -p "$cfg"
 printf '# comment\nforward_ssh = true\n' > "$cfg/launcher.conf"
 argv="$(run_ssh Linux docker "$h" SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_contains "$argv" "/tmp/a.sock:/ssh-agent" "conf forward_ssh=true: socket bound"
@@ -74,7 +74,7 @@ rm -rf "$h"
 
 # --- launcher.conf uses the env-var-style name instead of the ini key ->
 # --- stays off (no accidental enable) AND warns, instead of silently no-op'ing ---
-h="$(mktemp -d)"; cfg="$h/.config/vida-claude-container/vertex"; mkdir -p "$cfg"
+h="$(mktemp -d)"; cfg="$h/.config/claude-container/vertex"; mkdir -p "$cfg"
 printf 'CLAUDE_FORWARD_SSH=1\n' > "$cfg/launcher.conf"
 argv="$(run_ssh Linux docker "$h" SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_not_contains "$argv" "/ssh-agent" "wrong conf key name: forwarding stays off"
@@ -82,7 +82,7 @@ assert_contains "$argv" "unrecognized key 'CLAUDE_FORWARD_SSH'" "wrong conf key 
 rm -rf "$h"
 
 # --- env=0 overrides conf=true -> off ---
-h="$(mktemp -d)"; cfg="$h/.config/vida-claude-container/vertex"; mkdir -p "$cfg"
+h="$(mktemp -d)"; cfg="$h/.config/claude-container/vertex"; mkdir -p "$cfg"
 printf 'forward_ssh = true\n' > "$cfg/launcher.conf"
 argv="$(run_ssh Linux docker "$h" CLAUDE_FORWARD_SSH=0 SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_not_contains "$argv" "/ssh-agent" "env=0 overrides conf=true"
@@ -90,7 +90,7 @@ assert_contains "$argv" "claude-vertex:latest" "env=0 overrides conf=true: launc
 rm -rf "$h"
 
 # --- Darwin + docker (unsupported) -> warn + skip (no socket flags) ---
-h="$(mktemp -d)"; mkdir -p "$h/.config/vida-claude-container/vertex"
+h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"
 argv="$(run_ssh Darwin docker "$h" CLAUDE_FORWARD_SSH=1 SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_not_contains "$argv" "/ssh-agent" "darwin+docker: unsupported, no socket bind"
 assert_contains "$argv" "claude-vertex:latest" "darwin+docker: launcher reached rt_run"
@@ -98,7 +98,7 @@ assert_contains "$argv" "SSH forwarding unsupported" "darwin+docker: warns on sk
 rm -rf "$h"
 
 # --- apple -> --ssh flag present ---
-h="$(mktemp -d)"; mkdir -p "$h/.config/vida-claude-container/vertex"
+h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"
 argv="$(run_ssh Darwin apple "$h" CLAUDE_FORWARD_SSH=1 SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_contains "$argv" "--ssh" "apple: --ssh forwarded"
 rm -rf "$h"

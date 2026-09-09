@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Seed /home/claude/.claude (bind-mounted from the host state dir, e.g.
-# ~/.local/state/vida-claude-container/<flavor>/claude) from
+# ~/.local/state/claude-container/<flavor>/claude) from
 # the image's /opt/claude-seed payload on first launch. Idempotent: existing
 # files are preserved so user edits and prior plugin installs survive.
 #

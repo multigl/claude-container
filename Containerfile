@@ -1,8 +1,10 @@
-# Claude Code in a container, two flavors from one build:
-#   docker build --target vertex  -t claude-vertex:latest  .   # routes via Vertex AI
-#   docker build --target gateway -t claude-gateway:latest .   # routes via an LLM gateway
+# Claude Code in a container, three flavors from one build:
+#   docker build --target vertex   -t claude-vertex:latest   .   # routes via Vertex AI
+#   docker build --target gateway  -t claude-gateway:latest  .   # routes via an LLM gateway
+#   docker build --target personal -t claude-personal:latest .   # routes via api.anthropic.com
 # The shared `base` stage is built once and cached; each flavor adds only its
-# own payload (vertex gets gcloud; gateway gets the gateway ENV + apiKeyHelper).
+# own payload (vertex gets gcloud; gateway gets the gateway ENV + apiKeyHelper;
+# personal gets nothing baked -- auth happens in-container via `claude auth login`).
 FROM node:24-bookworm-slim AS base
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -174,3 +176,17 @@ COPY --chown=claude:claude seed-gateway/ /opt/claude-seed/
 # is the only dependency. settings.json points apiKeyHelper at this path.
 COPY gateway/okta_token_helper.py /opt/claude/api-key-helper
 RUN chmod 0755 /opt/claude/api-key-helper
+
+# ---------- personal flavor ----------
+# Talks to the first-party API (api.anthropic.com) with a personal Anthropic
+# account. Auth is `claude auth login --claudeai`, run inside the container by
+# `claude-personal auth`; the credential lands in ~/.claude/.credentials.json,
+# which is already inside the ~/.claude bind mount. Nothing is baked: no
+# ANTHROPIC_BASE_URL, no CLAUDE_CODE_USE_VERTEX, no model pins, and no
+# ENABLE_TOOL_SEARCH (that only exists to re-enable tool search against a
+# non-first-party base URL).
+FROM base AS personal
+
+ENV CLAUDE_FLAVOR_NAME=personal
+
+COPY --chown=claude:claude seed-personal/ /opt/claude-seed/

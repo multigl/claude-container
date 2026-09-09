@@ -1,51 +1,61 @@
-# claude-vertex / claude-gateway
+# claude-vertex / claude-gateway / claude-personal
 
 Run [Claude Code](https://docs.anthropic.com/en/docs/claude-code) inside a
-Docker container, routed through somewhere other than the public Anthropic API —
-without disturbing the host's regular `claude`, shell config, or gcloud setup.
+Docker container, isolated from the host's regular `claude`, shell config, and
+gcloud setup.
 
-Two flavors build from this one repo:
+Three flavors build from this one repo:
 
 | Flavor          | Routes through            | Auth                                   |
 |-----------------|---------------------------|----------------------------------------|
 | **`vertex`**    | Vida's **Vertex AI**      | gcloud ADC (`CLAUDE_CODE_USE_VERTEX=1`)|
 | **`gateway`**   | an **LLM gateway** (LiteLLM) | `apiKeyHelper` + `ANTHROPIC_BASE_URL`  |
+| **`personal`**  | `api.anthropic.com`       | `claude auth login --claudeai` inside the container |
 
 ```sh
 cd ~/vida/dbt
 claude-vertex     # billed through Vida's Vertex project
 claude-gateway    # routed through your LLM gateway
+claude-personal   # your own Anthropic account, signed in inside the container
 ```
 
 ## Why a container?
 
 - **Coexists with host `claude`.** Outside the container, normal `claude` keeps
-  hitting the Anthropic API. Inside, requests route through Vertex or the gateway.
+  hitting the Anthropic API under your regular login. Inside, `vertex` and
+  `gateway` route elsewhere, and `personal` hits the same Anthropic API but
+  under a separate, container-local account and credential.
 - **Zero host changes.** No edits to `~/.zshrc`, no shared gcloud config, no extra
   env vars in your shell.
-- **Pinned config.** Project, region, gateway URL, and model IDs are baked into
-  the image — no interactive `/login` ritual on every machine.
+- **Pinned config.** `vertex` and `gateway` bake project, region, gateway URL,
+  and model IDs into the image — no interactive `/login` ritual on every
+  machine. `personal` is the exception: it signs in with
+  `claude auth login --claudeai`, once, inside the container.
 - **Flavors don't collide.** Each flavor keeps its own state under
-  `~/.local/state/vida-claude-container/vertex/` vs
-  `~/.local/state/vida-claude-container/gateway/`.
+  `~/.local/state/claude-container/<flavor>/`.
 
-## How the two flavors share one build
+## How the three flavors share one build
 
 The `Containerfile` is multi-stage:
 
 ```
 base ──┬─► vertex    (adds gcloud CLI + Vertex ENV)
-       └─► gateway   (adds ANTHROPIC_BASE_URL + apiKeyHelper, no gcloud)
+       ├─► gateway   (adds ANTHROPIC_BASE_URL + apiKeyHelper, no gcloud)
+       └─► personal  (adds nothing baked — auth happens in-container)
 ```
 
 `base` holds everything common (node, claude-code, uv + mcp-atlassian, the
 plugin seed, the `claude` user, the entrypoint). Each flavor stage adds only its
-own payload, so the gateway image carries no gcloud and the vertex image keeps
-its Vertex pins. Build a flavor with `docker build --target <flavor>`.
+own payload, so the gateway image carries no gcloud, the vertex image keeps its
+Vertex pins, and the personal image carries neither. Build a flavor with
+`docker build --target <flavor>`.
 
-The host wrapper is a single script, `bin/claude-launcher.sh`, symlinked to both
-`claude-vertex` and `claude-gateway`; it picks its flavor from the name it was
-invoked as (override with `CLAUDE_FLAVOR=...`).
+The host wrapper is a single script, `bin/claude-launcher.sh`, symlinked to
+`claude-vertex`, `claude-gateway`, and `claude-personal`; it picks its flavor
+from the name it was invoked as (override with `CLAUDE_FLAVOR=...`). All
+flavor-specific behavior lives in a driver at `bin/flavors/<flavor>.sh` (see
+CLAUDE.md); the wrapper and `justfile` themselves don't know one flavor from
+another, and an unrecognized `CLAUDE_FLAVOR` is a hard error.
 
 ## Install
 
@@ -56,7 +66,7 @@ One-liner (detects OS/arch + runtime, clones, builds, symlinks
 curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash
 ```
 
-Useful flags: `--all` (both flavors), `--flavor vertex|gateway`,
+Useful flags: `--all` (all three flavors), `--flavor vertex|gateway|personal`,
 `--runtime docker|podman|apple`, `--prefix` / `--bin-dir`, `--ref`, `--dry-run`.
 
 ### Container runtime
@@ -91,13 +101,16 @@ instead; ineligible hosts fall through automatically.
    - **gateway** — your gateway's base URL, plus an Okta **Native app**
      `client_id` + `issuer`. A one-time browser device login mints the token;
      no host helper script is needed (it's baked into the image).
+   - **personal** — an Anthropic account. Nothing to configure ahead of time;
+     `claude-personal auth` runs the OAuth flow inside the container and you
+     approve it in your host browser.
 
 ## Quickstart
 
 ```sh
 git clone <this-repo> claude-vertex && cd claude-vertex
-just build-all      # build both images (shared base layer is cached)
-just install-all    # symlink claude-vertex AND claude-gateway onto PATH
+just build-all      # build all three images (shared base layer is cached)
+just install-all    # symlink claude-vertex, claude-gateway, AND claude-personal onto PATH
 ```
 
 ### Vertex
@@ -115,12 +128,20 @@ just build-gateway              # (optionally bake a default URL with
                                 #  docker build --target gateway
                                 #    --build-arg GATEWAY_BASE_URL=https://gateway.internal ...)
 
-FLAVOR=gateway just auth        # seeds ~/.config/vida-claude-container/gateway/env
-$EDITOR ~/.config/vida-claude-container/gateway/env   # set OKTA_CLIENT_ID + ANTHROPIC_BASE_URL
+FLAVOR=gateway just auth        # seeds ~/.config/claude-container/gateway/env
+$EDITOR ~/.config/claude-container/gateway/env   # set OKTA_CLIENT_ID + ANTHROPIC_BASE_URL
 FLAVOR=gateway just auth        # Okta device login — approve the URL in your browser
 
 cd ~/vida/dbt
 claude-gateway                  # routed through the gateway
+```
+
+### Personal
+
+```sh
+FLAVOR=personal just auth       # claude auth login --claudeai, approved in your host browser
+cd ~/vida/dbt
+claude-personal                 # your own Anthropic account
 ```
 
 ## Commands
@@ -130,7 +151,7 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 
 | Command                  | What it does                                                |
 |--------------------------|-------------------------------------------------------------|
-| `claude-vertex` / `claude-gateway` | Run `claude` against the current directory        |
+| `claude-vertex` / `claude-gateway` / `claude-personal` | Run `claude` against the current directory |
 | `claude-<flavor> shell`  | Drop into `bash` inside the container                       |
 | `claude-<flavor> -- <args>` | Pass flags through to `claude`                           |
 | `claude-<flavor> migrate-memory` | One-time: move the legacy shared memory bucket to this repo's per-project key (run from the repo that owns that history) |
@@ -138,13 +159,13 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 | `claude-<flavor> migrate-creds` | One-time: copy an old named cred volume into the new `$STATE_DIR/creds/…` bind dir (docker/podman only) |
 | `claude-<flavor> --print-runtime` | Print the resolved container runtime + per-runtime availability |
 | `just build`             | Build the `FLAVOR` image (`--target`)                       |
-| `just build-vertex` / `build-gateway` / `build-all` | Build a specific flavor / both |
-| `just rebuild-vertex` / `rebuild-gateway` / `rebuild-all` | No-cache rebuild of a flavor / both |
-| `just install` / `install-all` | Symlink one / both flavor commands                   |
-| `just auth`              | One-time login — vertex: gcloud ADC; gateway: Okta device login |
-| `just reset-auth`        | Wipe the flavor's cred dir (`$STATE_DIR/creds/…`); forces re-auth |
+| `just build-vertex` / `build-gateway` / `build-personal` / `build-all` | Build a specific flavor / all three |
+| `just rebuild-vertex` / `rebuild-gateway` / `rebuild-personal` / `rebuild-all` | No-cache rebuild of a flavor / all three |
+| `just install` / `install-all` | Symlink one / all three flavor commands              |
+| `just auth`              | One-time login — vertex: gcloud ADC; gateway: Okta device login; personal: `claude auth login --claudeai` |
+| `just reset-auth`        | Wipe the flavor's credential; forces re-auth                |
 | `just reseed`            | Overwrite the host config's seeded files (settings + plugins) from the image; preserves history |
-| `just test`              | Run the gateway Okta helper `pytest` suite                  |
+| `just test`              | Run the full test suite: the gateway Okta helper `pytest` suite, then `tests/run.sh` |
 | `FLAVOR=gateway just doctor` | Self-check for the gateway flavor                       |
 | `just doctor`            | Self-check (vertex): runtime, image, cred dir, ADC, PATH    |
 | `just`                   | List recipes (default)                                      |
@@ -167,27 +188,34 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 │        auth: baked apiKeyHelper mints an Okta id_token;      │
 │              refresh_token in $STATE_DIR/creds/okta         │
 │        ───────► <gateway>/v1/messages                        │
+│                                                              │
+│  $ claude-personal ──► container claude-personal:latest      │
+│        env: (nothing baked)                                  │
+│        auth: claude auth login --claudeai;                   │
+│              creds in $STATE_CLAUDE_DIR/.credentials.json    │
+│        ───────► api.anthropic.com                            │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Shared by both flavors:
+Shared by all three flavors:
 
 - **Per-user state** (`settings.json`, `shell-snapshots`, …) lives in host
-  `~/.local/state/vida-claude-container/<flavor>/claude/`, separate from
-  `~/.claude`, so the regular host `claude` is never touched and the two
-  flavors don't collide.
+  `~/.local/state/claude-container/<flavor>/claude/`, separate from
+  `~/.claude`, so the regular host `claude` is never touched and the flavors
+  don't collide.
 - **Pre-seeded config.** On first launch the entrypoint copies the baked-in
   baseline from `/opt/claude-seed/` (common bits from `seed-common/`, plus the
   flavor's `settings.json`) into the empty
-  `~/.local/state/vida-claude-container/<flavor>/claude/`. Seeding is
+  `~/.local/state/claude-container/<flavor>/claude/`. Seeding is
   idempotent (`rsync --ignore-existing`), so edits survive future starts. To push
   updated seed files (e.g. a new `settings.json` or plugin) into an existing config
   dir, `FLAVOR=<flavor> just reseed` overwrites just those files and keeps your
   history/projects. Re-seed from scratch:
-  `rm -rf ~/.local/state/vida-claude-container/<flavor>`.
+  `rm -rf ~/.local/state/claude-container/<flavor>`.
 - **MCP servers** (atlassian, context7) are defined in `seed-common/dotclaude.json`.
   Credentials can come from the flavor env file or be grafted read-only from your
-  host `~/.claude.json`.
+  host `~/.claude.json`. (Vertex seeds atlassian + context7; gateway the same;
+  personal seeds context7 only.)
 
 ## Git & GitHub inside the container
 
@@ -205,7 +233,7 @@ The container uses your **host** git/GitHub setup — no second login.
   credential helper so HTTPS `git push` works. Use HTTPS remotes.
 - **SSH agent forwarding + commit signing (opt-in).** Turn it on per run with
   `CLAUDE_FORWARD_SSH=1`, or persist it in
-  `~/.config/vida-claude-container/<flavor>/launcher.conf`:
+  `~/.config/claude-container/<flavor>/launcher.conf`:
 
   ```ini
   forward_ssh = true
@@ -240,19 +268,25 @@ The container uses your **host** git/GitHub setup — no second login.
 
 ## File locations (XDG)
 
-Wrapper files live in an XDG split under the `vida-claude-container` namespace:
+Wrapper files live in an XDG split under the `claude-container` namespace. This
+was renamed from an earlier namespace; the launcher migrates a flavor's
+directories to the new name the first time it runs after upgrading (config and
+state moved separately, each only if the new path doesn't already exist) and
+prints what it moved. `just doctor` warns if anything is still left behind
+under the old name.
 
-    $XDG_CONFIG_HOME/vida-claude-container/<flavor>/   # you edit these; back them up
+    $XDG_CONFIG_HOME/claude-container/<flavor>/   # you edit these; back them up
     ├── env                     # MCP creds / endpoints (chmod 600)
     ├── mounts                  # extra host dirs to expose (one host path per line; see CLAUDE.md for the format)
     ├── launcher.conf           # host-side launcher settings (e.g. forward_ssh)
     └── settings.override.json  # optional Claude settings deltas, e.g. {"model": "..."}
 
-    $XDG_STATE_HOME/vida-claude-container/<flavor>/    # machine-managed; disposable
+    $XDG_STATE_HOME/claude-container/<flavor>/    # machine-managed; disposable
     ├── claude/                 # seeded config -> container ~/.claude
     │   ├── claude.json         # trust flags, mcpServers, grafted MCP creds (container ~/.claude.json, symlinked)
+    │   ├── .credentials.json   # personal only: OAuth token, written by claude-code itself (plaintext; see "Personal auth" below)
     │   └── memory-global/      # per-flavor global memory tier (cross-project facts)
-    ├── creds/                  # auth caches (bind dirs, not named volumes)
+    ├── creds/                  # vertex/gateway only: auth caches (bind dirs, not named volumes)
     │   ├── gcloud/             # vertex: gcloud ADC       -> container ~/.config/gcloud
     │   └── okta/               # gateway: Okta token cache -> container ~/.local/share/litellm
     └── projects/<key>/         # per-repo memory + /resume history, keyed on host $PWD
@@ -278,8 +312,8 @@ Earlier builds stored these files directly in `$HOME`. There is no automated
 migration; move them by hand once (per flavor):
 
     flavor=vertex   # or gateway
-    cfg="${XDG_CONFIG_HOME:-$HOME/.config}/vida-claude-container/$flavor"
-    state="${XDG_STATE_HOME:-$HOME/.local/state}/vida-claude-container/$flavor"
+    cfg="${XDG_CONFIG_HOME:-$HOME/.config}/claude-container/$flavor"
+    state="${XDG_STATE_HOME:-$HOME/.local/state}/claude-container/$flavor"
     mkdir -p "$cfg" "$state"
     mv ~/.claude-$flavor.env       "$cfg/env"        2>/dev/null || true
     mv ~/.claude-$flavor.mounts    "$cfg/mounts"     2>/dev/null || true
@@ -297,8 +331,8 @@ The gateway flavor is a generic Anthropic-format client pointed at your gateway.
 | `ENABLE_TOOL_SEARCH`             | `true`                               | Re-enables MCP tool search, which Claude disables by default against a non-first-party base URL. |
 | `ANTHROPIC_MODEL` + `ANTHROPIC_DEFAULT_*_MODEL` | placeholders (`claude-opus-4-6`, …) | Set to the `model_name` strings your gateway exposes. |
 | `apiKeyHelper`                   | `/opt/claude/api-key-helper`         | Baked Okta helper (`gateway/okta_token_helper.py`, python3-only). Mints/refreshes an Okta **id_token** (JWT); token cache lives in `$STATE_DIR/creds/okta` (bind dir → container `~/.local/share/litellm`). |
-| `OKTA_ISSUER`                    | `https://vida.okta.com`              | Okta **Org** authorization server (no `/oauth2/<id>`). Set in `~/.config/vida-claude-container/gateway/env`. |
-| `OKTA_CLIENT_ID`                 | —                                    | The Okta **Native app** `client_id`; must equal LiteLLM's `JWT_AUDIENCE`. Set in `~/.config/vida-claude-container/gateway/env`. |
+| `OKTA_ISSUER`                    | `https://vida.okta.com`              | Okta **Org** authorization server (no `/oauth2/<id>`). Set in `~/.config/claude-container/gateway/env`. |
+| `OKTA_CLIENT_ID`                 | —                                    | The Okta **Native app** `client_id`; must equal LiteLLM's `JWT_AUDIENCE`. Set in `~/.config/claude-container/gateway/env`. |
 
 **Auth (one-time device login).** `FLAVOR=gateway just auth` runs the baked helper
 with `--login-only`: it prints an Okta verification URL (approve it in your host
@@ -312,7 +346,7 @@ on HTTP 401); Claude sends the `id_token` as the bearer. Refresh tokens expire a
 `https://vida.okta.com/oauth2/v1/keys`. (Vida's Okta has only the Org server, which
 issues ID tokens — not custom-API access tokens — hence the id_token-as-bearer design.)
 
-**Env file (`~/.config/vida-claude-container/gateway/env`).** Holds `OKTA_ISSUER`, `OKTA_CLIENT_ID`,
+**Env file (`~/.config/claude-container/gateway/env`).** Holds `OKTA_ISSUER`, `OKTA_CLIENT_ID`,
 `ANTHROPIC_BASE_URL`, and `CLAUDE_CODE_API_KEY_HELPER_TTL_MS`, passed into the
 container via `--env-file` so the helper reads them. Vars set only in `settings.json`
 do **not** reach the helper.
@@ -323,7 +357,7 @@ do **not** reach the helper.
 ## Vertex configuration
 
 The image sets the provider basics; the **model + region pins live in the seeded
-env file** (`~/.config/vida-claude-container/vertex/env`), passed in via
+env file** (`~/.config/claude-container/vertex/env`), passed in via
 `--env-file` (which overrides image ENV).
 
 | Var                              | Value                     | Where                 |
@@ -353,6 +387,31 @@ the env file. **Existing installs:** the env file is seeded only when absent and
 `reseed` does not rewrite it — hand-add the rows above to your live env file, then
 kill and reopen the session (env is read once at container start).
 
+## Personal auth
+
+The personal flavor signs Claude Code in to a real Anthropic account, from
+inside the container, instead of routing through Vertex or a gateway.
+
+**Auth (one-time OAuth login).** `FLAVOR=personal just auth` (or
+`claude-personal auth`) runs `claude auth login --claudeai` inside the
+container. It prints a URL — approve it in your host browser. There's nothing
+to configure beforehand: no project ID, no gateway URL, no Okta app.
+
+**The credential is plaintext.** Claude Code writes the token to
+`~/.local/state/claude-container/personal/claude/.credentials.json` on the
+host, unencrypted. That's not a choice this repo made — a Linux container has
+no keychain to store it in, and Claude Code doesn't expose a credential-helper
+hook that could supply one. On a Linux host this is no different from a normal
+`claude` install, which also keeps its token in a plaintext
+`~/.claude/.credentials.json`. **On macOS it's a downgrade**: the host's
+regular `claude` keeps its token in the Keychain, and this one doesn't.
+
+The mitigation is filesystem permissions, not encryption: the launcher
+`chmod 700`s the state directory on every launch, and Claude Code itself
+writes the credential file `0600`. `FLAVOR=personal just doctor` checks both
+and warns if either has drifted. `FLAVOR=personal just reset-auth` deletes the
+credential file outright.
+
 ## Verifying which provider you're on
 
 Run `/status` inside Claude:
@@ -362,12 +421,14 @@ Run `/status` inside Claude:
   `resource.type="aiplatform.googleapis.com/Endpoint"` filtered to your email.
 - **gateway** → the base URL should be your gateway, **not** `api.anthropic.com` or
   Vertex. Confirm a request lands in your gateway's logs.
+- **personal** → no Vertex project, no gateway base URL; the signed-in account
+  is whichever one you completed `claude auth login --claudeai` with.
 
 ## Troubleshooting
 
 **`/status` shows the wrong provider** — stale state under
-`~/.local/state/vida-claude-container/<flavor>/`. Try
-`rm -rf ~/.local/state/vida-claude-container/<flavor>` and relaunch.
+`~/.local/state/claude-container/<flavor>/`. Try
+`rm -rf ~/.local/state/claude-container/<flavor>` and relaunch.
 
 **vertex: `just auth` fails with browser/URL issues** —
 `just reset-auth && just auth`.
@@ -381,6 +442,11 @@ Re-login: `FLAVOR=gateway just reset-auth` then `FLAVOR=gateway just auth`. To
 inspect, `claude-gateway shell` then run `/opt/claude/api-key-helper` by hand — it
 prints the `id_token` to stdout and diagnostics to stderr.
 
+**personal: logged out, or `.credentials.json` permissions warning** —
+`FLAVOR=personal just reset-auth` then `FLAVOR=personal just auth`.
+`FLAVOR=personal just doctor` reports whether the credential is present and
+whether its permissions (or the state directory's) have drifted from `0600`/`0700`.
+
 **`just doctor` reports problems** — follow its hints (per flavor).
 
 **Permission errors writing to a mounted dir** — under docker on Linux the
@@ -390,11 +456,12 @@ container remaps to your host UID/GID; podman uses `--userns=keep-id`; macOS
 ## Uninstall
 
 ```sh
-just uninstall                  # remove both wrapper symlinks
+just uninstall                  # remove all three wrapper symlinks
 FLAVOR=gateway just clean       # remove gateway image
+FLAVOR=personal just clean      # remove personal image
 just clean                      # remove vertex image
-just reset-auth                 # wipe the flavor's cred dir ($STATE_DIR/creds/…)
-rm -rf ~/.config/vida-claude-container ~/.local/state/vida-claude-container
+just reset-auth                 # wipe the flavor's credential
+rm -rf ~/.config/claude-container ~/.local/state/claude-container
 ```
 
 ## License
