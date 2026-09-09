@@ -4,21 +4,21 @@
     "superpowers@claude-plugins-official": [
       {
         "scope": "user",
-        "installPath": "/home/claude/.claude/plugins/cache/claude-plugins-official/superpowers/5.1.0",
-        "version": "5.1.0",
+        "installPath": "/home/claude/.claude/plugins/cache/claude-plugins-official/superpowers/6.3.0",
+        "version": "6.3.0",
         "installedAt": "2026-05-26T00:00:00.000Z",
-        "lastUpdated": "2026-05-26T00:00:00.000Z",
-        "gitCommitSha": "f2cbfbefebbfef77321e4c9abc9e949826bea9d7"
+        "lastUpdated": "2026-09-09T00:00:00.000Z",
+        "gitCommitSha": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
       }
     ],
     "caveman@caveman": [
       {
         "scope": "user",
-        "installPath": "/home/claude/.claude/plugins/cache/caveman/caveman/ef6050c5e184",
-        "version": "ef6050c5e184",
+        "installPath": "/home/claude/.claude/plugins/cache/caveman/caveman/b82c0ad42c2b",
+        "version": "b82c0ad42c2b",
         "installedAt": "2026-05-26T00:00:00.000Z",
-        "lastUpdated": "2026-05-26T00:00:00.000Z",
-        "gitCommitSha": "ef6050c5e1848b6880ff47c32ade1a608a64f85e"
+        "lastUpdated": "2026-09-09T00:00:00.000Z",
+        "gitCommitSha": "b82c0ad42c2bedc1f2cd78e414dadfaffbaaeec3"
       }
     ]
   }

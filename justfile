@@ -1,6 +1,6 @@
-flavor     := env_var_or_default("FLAVOR", "personal")
-image      := env_var_or_default("IMAGE", "claude-" + flavor + ":latest")
-bin_dir    := env_var_or_default("BIN_DIR", env_var("HOME") + "/.local/bin")
+flavor     := env("FLAVOR", "personal")
+image      := env("IMAGE", "claude-" + flavor + ":latest")
+bin_dir    := env("BIN_DIR", env("HOME") + "/.local/bin")
 here       := justfile_directory()
 
 # Show available recipes
