@@ -298,6 +298,14 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   forwarded agent. `gpg.ssh.program` is deliberately never grafted so the
   container's own `ssh-keygen` signs via the forwarded agent. GitHub host keys
   are baked into the image so SSH push works.
+- **DNS override.** `CLAUDE_DNS` env or the `launcher.conf` `dns` key (comma/space
+  list; env wins) becomes one `--dns IP` run flag per server, on every runtime
+  (`_dns_flags` in `bin/claude-launcher.sh`, tested by `tests/test_dns_flags.sh`).
+  Non-IP tokens are warned about and dropped, so a value can't smuggle in a run
+  flag. Motivating case: apple `container` on a Zscaler-managed Mac, where the
+  vmnet gateway resolver (`192.168.64.1`) times out
+  (`getaddrinfo ETIMEDOUT platform.claude.com`) but direct DNS and TCP/TLS work
+  fine. No TLS interception was seen there, so no extra CA was needed.
 - **Hadolint.** `GOOGLE_APPLICATION_CREDENTIALS` is exported at runtime by the
   entrypoint, not baked as `ENV`, to avoid the `SecretsUsedInArgOrEnv` warning on
   the `*_CREDENTIALS` name pattern.

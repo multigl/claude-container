@@ -239,6 +239,18 @@ The container uses your **host** git/GitHub setup — no second login.
   `gh auth token` (works even when gh stores it in the OS keyring) and injects it
   as `GH_TOKEN`. `gh pr`/`gh api` work, and `gh` is registered as the HTTPS git
   credential helper so HTTPS `git push` works. Use HTTPS remotes.
+- **Custom DNS servers.** If lookups time out inside the container while the
+  host resolves fine, set resolvers per run with `CLAUDE_DNS=1.1.1.1`, or
+  persist them in `~/.config/claude-container/<flavor>/launcher.conf` (comma or
+  space separated; the env var wins):
+
+  ```ini
+  dns = 1.1.1.1, 8.8.8.8
+  ```
+
+  Seen on macOS with apple `container` behind Zscaler: the VM's default resolver
+  (the vmnet gateway, `192.168.64.1`) times out, but DNS sent straight to a
+  public resolver works. Each value becomes a `--dns` run flag on any runtime.
 - **SSH agent forwarding + commit signing (opt-in).** Turn it on per run with
   `CLAUDE_FORWARD_SSH=1`, or persist it in
   `~/.config/claude-container/<flavor>/launcher.conf`:
@@ -286,7 +298,7 @@ under the old name.
     $XDG_CONFIG_HOME/claude-container/<flavor>/   # you edit these; back them up
     ├── env                     # MCP creds / endpoints (chmod 600)
     ├── mounts                  # extra host dirs to expose (one host path per line; see CLAUDE.md for the format)
-    ├── launcher.conf           # host-side launcher settings (e.g. forward_ssh)
+    ├── launcher.conf           # host-side launcher settings (forward_ssh, dns)
     └── settings.override.json  # optional Claude settings deltas, e.g. {"model": "..."}
 
     $XDG_STATE_HOME/claude-container/<flavor>/    # machine-managed; disposable

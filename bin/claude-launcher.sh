@@ -217,8 +217,9 @@ HOST_ENV_FILE="${CLAUDE_ENV_FILE:-${CFG_DIR}/env}"
 HOST_MOUNTS_FILE="${CLAUDE_MOUNTS_FILE:-${CFG_DIR}/mounts}"
 HOST_SETTINGS="${CLAUDE_SETTINGS:-${CFG_DIR}/settings.override.json}"
 # launcher.conf: host-side launcher settings (flat INI `key = value`, parsed not
-# sourced). First key: forward_ssh (SSH agent forwarding toggle). No escape-hatch
-# path override -- the per-run env override is CLAUDE_FORWARD_SSH.
+# sourced). Keys: forward_ssh (SSH agent forwarding toggle), dns (resolver list).
+# No escape-hatch path override -- per-run env overrides are CLAUDE_FORWARD_SSH
+# and CLAUDE_DNS.
 HOST_LAUNCHER_CONF="${CFG_DIR}/launcher.conf"
 
 # Flavor driver (fl_* functions). Mirrors the runtime dispatcher's driver split.
@@ -248,7 +249,7 @@ _ssh_forward_enabled() {
 # used where the ini key (forward_ssh) belongs, since the sibling `env` file uses
 # ALL_CAPS keys and it's an easy mix-up. Without this, forwarding just silently
 # never turns on and there's no signal pointing at the config file as the cause.
-_KNOWN_LAUNCHER_CONF_KEYS=" forward_ssh "
+_KNOWN_LAUNCHER_CONF_KEYS=" forward_ssh dns "
 _conf_warn_unknown_keys() {  # _conf_warn_unknown_keys FILE
     local file="$1" line k
     [[ -f "$file" ]] || return 0
@@ -259,9 +260,26 @@ _conf_warn_unknown_keys() {  # _conf_warn_unknown_keys FILE
         k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
         [[ -z "$k" ]] && continue
         if [[ "$_KNOWN_LAUNCHER_CONF_KEYS" != *" $k "* ]]; then
-            echo ">> launcher.conf: unrecognized key '$k' (known keys: forward_ssh); ignored" >&2
+            echo ">> launcher.conf: unrecognized key '$k' (known keys:${_KNOWN_LAUNCHER_CONF_KEYS% }); ignored" >&2
         fi
     done < "$file"
+}
+
+# DNS servers for the container, one `--dns`/IP token per line. Precedence:
+# CLAUDE_DNS env > launcher.conf `dns` > none (runtime default). Needed where the
+# runtime's own forwarder is broken -- e.g. apple `container`'s vmnet gateway
+# resolver times out under Zscaler's packet filter while direct DNS works.
+# Tokens are only IP-shaped so a stray value can never become a run flag.
+_dns_flags() {
+    local servers="${CLAUDE_DNS:-}" server
+    [[ -n "$servers" ]] || servers="$(_conf_get dns "$HOST_LAUNCHER_CONF")"
+    for server in ${servers//,/ }; do
+        if [[ "$server" =~ ^[0-9A-Fa-f.:]+$ ]]; then
+            printf '%s\n' --dns "$server"
+        else
+            echo ">> dns: '$server' is not an IP address; ignored" >&2
+        fi
+    done
 }
 
 # Is forwarding supported on this runtime+OS combo? apple (any mac), or Linux with
@@ -462,8 +480,11 @@ run_in_container() {
         fi
     fi
 
+    local dns_flags=()
+    while IFS= read -r _f; do [[ -n "$_f" ]] && dns_flags+=("$_f"); done < <(_dns_flags)
+
     rt_run --rm "${extra_flags[@]}" "${rt_flags[@]+"${rt_flags[@]}"}" \
-        "${ssh_flags[@]+"${ssh_flags[@]}"}" \
+        "${ssh_flags[@]+"${ssh_flags[@]}"}" "${dns_flags[@]+"${dns_flags[@]}"}" \
         --env-file "$HOST_ENV_FILE" \
         -e "HOST_UID=$(id -u)" \
         -e "HOST_GID=$(id -g)" \
