@@ -138,7 +138,7 @@ them.
 
 The `env` file is seeded per-flavor **only when absent** (not by `reseed`), with
 real values, not blanks. The **vertex** flavor seeds model + region pins
-(`ANTHROPIC_MODEL=claude-opus-4-8[1m]`, `…_SONNET_MODEL=claude-sonnet-5`,
+(`ANTHROPIC_MODEL=claude-opus-5[1m]`, `…_SONNET_MODEL=claude-sonnet-5`,
 `…_HAIKU_MODEL=claude-haiku-4-5`, `CLOUD_ML_REGION=us`,
 `VERTEX_REGION_CLAUDE_HAIKU_4_5=us-east5`). All US, for data residency: opus/sonnet
 on the `us` multi-region, haiku on `us-east5`. Pinning is load-bearing — unpinned,

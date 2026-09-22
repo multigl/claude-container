@@ -72,11 +72,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/b
 # Lives under /opt/claude-seed; copied into ~/.claude (the bind-mount from
 # host ~/.claude-<flavor>) on first container start by the entrypoint.
 # seed-common/ is flavor-neutral; each flavor stage overlays its settings.json.
-ARG SUPERPOWERS_SHA=b36e0829c6d0140e93cfef2ca599b1b07d4a7797
-ARG SUPERPOWERS_VERSION=6.3.0
-ARG CAVEMAN_SHA=b82c0ad42c2bedc1f2cd78e414dadfaffbaaeec3
+ARG SUPERPOWERS_SHA=5bf4e78011075bcfc0dc295f0724994cd123ee71
+ARG SUPERPOWERS_VERSION=6.4.1
+ARG CAVEMAN_SHA=2fd153c67988e980fb0b2455c90832159a6a5a25
 # Cache dir name matches the short SHA used by `claude plugin` on the host.
-ARG CAVEMAN_VERSION=b82c0ad42c2b
+ARG CAVEMAN_VERSION=2fd153c67988
 
 COPY seed-common/ /opt/claude-seed/
 
@@ -161,7 +161,7 @@ FROM base AS gateway
 ARG GATEWAY_BASE_URL=https://your-gateway.example.com
 ENV ANTHROPIC_BASE_URL=${GATEWAY_BASE_URL} \
     ENABLE_TOOL_SEARCH=true \
-    ANTHROPIC_MODEL=claude-opus-4-8 \
+    ANTHROPIC_MODEL=claude-opus-5 \
     ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5 \
     ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-5 \
     ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5 \

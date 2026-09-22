@@ -104,7 +104,7 @@ seed_env() {  # seed_env FLAVOR  -> prints seeded env-file contents
 }
 
 venv="$(seed_env vertex)"
-assert_contains "$venv" "ANTHROPIC_MODEL=claude-opus-4-8[1m]"            "vertex env seeds opus 1m primary"
+assert_contains "$venv" "ANTHROPIC_MODEL=claude-opus-5[1m]"            "vertex env seeds opus 1m primary"
 assert_contains "$venv" "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5" "vertex env seeds sonnet-5 pin"
 assert_contains "$venv" "ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5" "vertex env seeds haiku pin"
 assert_contains "$venv" "VERTEX_REGION_CLAUDE_HAIKU_4_5=us-east5"        "vertex env seeds haiku us-east5 override"

@@ -38,7 +38,7 @@ fl_seed_env() {
 # ANTHROPIC_VERTEX_PROJECT_ID=acme-ai-prod
 # =============================================================================
 #
-# All US regions, for data-residency requirements: Opus 4.8 + Sonnet 5 aren't
+# All US regions, for data-residency requirements: Opus 5 + Sonnet 5 aren't
 # served on single regions like us-east5 -- they need global/multi-region, so
 # they ride the "us" multi-region below. Haiku 4.5 -> us-east5 (also US). Drop
 # these pins if your own residency rules differ.
@@ -47,8 +47,8 @@ fl_seed_env() {
 # to claude-sonnet-4-5, which 429s if your project can't invoke it (it powers
 # session titles + web-search summarization). Pinning also restores the 1M
 # context window -- append [1m] to a model ID; Sonnet 5 is always 1M (no suffix).
-ANTHROPIC_MODEL=claude-opus-4-8[1m]
-ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]
+ANTHROPIC_MODEL=claude-opus-5[1m]
+ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-5[1m]
 ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5
 ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
 CLOUD_ML_REGION=us

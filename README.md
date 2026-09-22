@@ -349,7 +349,7 @@ The gateway flavor is a generic Anthropic-format client pointed at your gateway.
 |----------------------------------|--------------------------------------|-----------------------------------------|
 | `ANTHROPIC_BASE_URL`             | `https://your-gateway.example.com`   | Claude **appends `/v1/messages`** — set the base *without* it. Bake via `--build-arg GATEWAY_BASE_URL=…` or override at runtime. |
 | `ENABLE_TOOL_SEARCH`             | `true`                               | Re-enables MCP tool search, which Claude disables by default against a non-first-party base URL. |
-| `ANTHROPIC_MODEL` + `ANTHROPIC_DEFAULT_*_MODEL` | placeholders (`claude-opus-4-6`, …) | Set to the `model_name` strings your gateway exposes. |
+| `ANTHROPIC_MODEL` + `ANTHROPIC_DEFAULT_*_MODEL` | placeholders (`claude-opus-5`, …) | Set to the `model_name` strings your gateway exposes. |
 | `apiKeyHelper`                   | `/opt/claude/api-key-helper`         | Baked Okta helper (`gateway/okta_token_helper.py`, python3-only). Mints/refreshes an Okta **id_token** (JWT); token cache lives in `$STATE_DIR/creds/okta` (bind dir → container `~/.local/share/litellm`). |
 | `OKTA_ISSUER`                    | `https://YOUR-ORG.okta.com`          | Okta **Org** authorization server (no `/oauth2/<id>`). Set in `~/.config/claude-container/gateway/env`. |
 | `OKTA_CLIENT_ID`                 | —                                    | The Okta **Native app** `client_id`; must equal LiteLLM's `JWT_AUDIENCE`. Set in `~/.config/claude-container/gateway/env`. |
@@ -386,8 +386,8 @@ env file** (`~/.config/claude-container/vertex/env`), passed in via
 | `CLAUDE_CODE_USE_VERTEX`         | `1`                       | image ENV             |
 | `ANTHROPIC_VERTEX_PROJECT_ID`    | `your-gcp-project` (placeholder — **must be replaced**) | flavor `env` file, or image ENV (`--build-arg VERTEX_PROJECT_ID=…`) |
 | `CLOUD_ML_REGION`                | `us`                      | image ENV + env file  |
-| `ANTHROPIC_MODEL`                | `claude-opus-4-8[1m]`     | seeded env file       |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL`   | `claude-opus-4-8[1m]`     | seeded env file       |
+| `ANTHROPIC_MODEL`                | `claude-opus-5[1m]`     | seeded env file       |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL`   | `claude-opus-5[1m]`     | seeded env file       |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | `claude-sonnet-5`         | seeded env file       |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL`  | `claude-haiku-4-5`        | seeded env file       |
 | `VERTEX_REGION_CLAUDE_HAIKU_4_5` | `us-east5`                | seeded env file       |
@@ -406,7 +406,7 @@ baked it, leave the env-file line **commented** — an empty
 `ANTHROPIC_VERTEX_PROJECT_ID=` there overrides the baked value with nothing.
 
 **All-US regions.** The seeded pins keep every request in the US, for
-data-residency rules. Opus 4.8 + Sonnet 5 aren't served on single regions like
+data-residency rules. Opus 5 + Sonnet 5 aren't served on single regions like
 `us-east5`; they need `global`/multi-region, so they ride the `us` multi-region.
 Haiku 4.5 → `us-east5` via the per-model override (also US). Change these if your
 own residency rules differ.
@@ -415,7 +415,7 @@ own residency rules differ.
 `claude-sonnet-4-5` — which `429`s if your project can't invoke it, and it powers
 session titles + web-search summarization. Pinning the aliases removes that reach.
 Pinning also restores the **1M context window**: append `[1m]` to a model ID
-(Opus 4.8 here); Sonnet 5 always runs 1M, no suffix.
+(Opus 5 here); Sonnet 5 always runs 1M, no suffix.
 
 Override per-invocation by exporting env (the wrapper passes it through), or edit
 the env file. **Existing installs:** the env file is seeded only when absent and
