@@ -55,6 +55,9 @@ STUB
 case "\$1" in -m) echo arm64 ;; *) echo $os ;; esac
 STUB
     printf '#!/usr/bin/env bash\necho 26.0\n' > "$bin/sw_vers"
+    # Defaults so a real getenforce/gh on /usr/bin can't leak in; cases override.
+    printf '#!/usr/bin/env bash\necho Disabled\n' > "$bin/getenforce"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$bin/gh"
     chmod +x "$bin"/*
     [[ -n "${CASE_FAKES:-}" ]] && "$CASE_FAKES" "$bin"
     [[ -n "${CASE_SETUP:-}" ]] && "$CASE_SETUP" "$home"
