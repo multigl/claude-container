@@ -32,3 +32,9 @@ rt_build_cmd() {  # rt_build_cmd <flavor> <image> <context>
 rt_run() {  # rt_run <flag-array-via-env RT_FLAGS...> -- handled by launcher
     docker run "$@"
 }
+
+rt_pull() { docker pull "$1"; }  # rt_pull <image>
+
+rt_image_label() {  # rt_image_label <image> <key>  -> label value or nothing
+    docker image inspect -f "{{ index .Config.Labels \"$2\" }}" "$1" 2>/dev/null
+}
