@@ -32,6 +32,10 @@ assert_contains "$wf" "go test ./..." "Go tests run in CI"
 assert_contains "$wf" "go vet ./..." "go vet runs in CI"
 assert_contains "$wf" 'test -z "$(gofmt -l .)"' "gofmt is enforced"
 
+plan_job="$(sed -n '/^  plan:/,/^  publish:/p' "$WF")"
+assert_contains "$plan_job" "GH_REPO: \${{ github.repository }}" "plan job sets GH_REPO (no checkout)"
+assert_contains "$plan_job" "release not found" "plan distinguishes release-not-found from other gh errors"
+
 release_job="$(sed -n '/^  release:/,$p' "$WF")"
 assert_contains "$(grep -m1 '^    needs:' <<<"$release_job")" "publish" "release waits for publish"
 assert_contains "$release_job" "contents: write" "release job can create releases"

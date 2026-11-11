@@ -53,6 +53,8 @@ jobs:
       packages: read
     env:
       GH_TOKEN: ${{ github.token }}
+      # No checkout here, so gh can't infer the repo from a git remote.
+      GH_REPO: ${{ github.repository }}
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       sha7: ${{ steps.resolve.outputs.sha7 }}
@@ -82,7 +84,19 @@ jobs:
               published="$(cut -f1 <<<"$labels")"
               revision="$(cut -f2 <<<"$labels")"
               [[ "$published" == "$version" ]] || build=true
-              [[ -n "$revision" ]] && gh release view "v$version-${revision::7}" >/dev/null 2>&1 || build=true
+              if [[ -z "$revision" ]]; then
+                build=true
+              elif ! release_error="$(gh release view "v$version-${revision::7}" 2>&1)"; then
+                # Only "not found" means build; any other gh failure must not
+                # silently turn every weekly run into a rebuild.
+                if [[ "$release_error" == *"release not found"* ]]; then
+                  build=true
+                else
+                  echo "gh release view failed: $release_error" >> "$GITHUB_STEP_SUMMARY"
+                  echo "gh release view failed: $release_error" >&2
+                  exit 1
+                fi
+              fi
               echo "$flavor-latest claude-code: ${published:-<none>} revision: ${revision:-<none>}" >> "$GITHUB_STEP_SUMMARY"
             done
             echo "npm latest: $version, build: $build" >> "$GITHUB_STEP_SUMMARY"
