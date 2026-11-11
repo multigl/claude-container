@@ -6,6 +6,7 @@
 # purpose (GH_TOKEN rides the env file, not argv), the case adjusts them.
 cd "$(dirname "$0")"
 source ./lib.sh
+setup_host_tools
 FIXTURE_DIR="$(cd .. && pwd)/testdata/parity"
 
 # normalize_argv STAGE PROJECT_KEY HOME PWD UID GID IMAGE < raw argv
@@ -78,7 +79,7 @@ STUB
     ln -s "$LAUNCHER" "$root/claude-$flavor"
     (
         cd "$workdir" || exit 1
-        env -i HOME="$home" PATH="$bin:/usr/bin:/bin" \
+        env -i HOME="$home" PATH="$bin:$HOST_TOOLS" \
             XDG_CONFIG_HOME="$home/.config" XDG_STATE_HOME="$home/.local/state" \
             GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
             CLAUDE_RUNTIME="$runtime" "${env_pairs[@]}" \

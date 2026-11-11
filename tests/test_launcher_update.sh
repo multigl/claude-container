@@ -5,6 +5,7 @@
 # whose pinned image is the floating <flavor>-latest tag.
 cd "$(dirname "$0")"
 source ./lib.sh
+setup_host_tools
 
 # run_update PULL_RC CONFIG_TEXT [KEY=VAL...] -> "<rc>\n<stdout+stderr>\n--log--\n<runtime argv log>"
 # Linux host with docker, podman and container stubs; CLAUDE_RUNTIME defaults
@@ -31,7 +32,7 @@ S
     printf '#!/usr/bin/env bash\n[[ "$1" == "-m" ]] && { echo arm64; exit 0; }\necho %s\n' "$host_os" > "$bin/uname"
     printf '#!/usr/bin/env bash\necho 26.0\n' > "$bin/sw_vers"
     chmod +x "$bin"/*
-    out="$(env -i HOME="$home" PATH="$bin:/usr/bin:/bin" CLAUDE_FLAVOR=personal CLAUDE_RUNTIME=docker "$@" \
+    out="$(env -i HOME="$home" PATH="$bin:$HOST_TOOLS" CLAUDE_FLAVOR=personal CLAUDE_RUNTIME=docker "$@" \
         "$LAUNCHER" update </dev/null 2>&1)"
     rc=$?
     printf '%s\n%s\n--log--\n%s' "$rc" "$out" "$(cat "$log")"
@@ -68,9 +69,10 @@ out="$(run_update 1 "")"
 assert_eq "1" "$(rc_of "$out")" "failed pull exits nonzero"
 assert_contains "$out" "still private" "failed pull hints at private package"
 
+# update itself exits 1 on any pull failure; passing the runtime's code through
+# was the old dispatcher's behavior, not the launcher's.
 out="$(run_update 7 "")"
-if [[ "$(rc_of "$out")" -ne 0 ]]; then s=nonzero; else s=zero; fi
-assert_eq "nonzero" "$s" "any failed pull exit code fails the update"
+assert_eq "1" "$(rc_of "$out")" "any failed pull exit code makes update exit 1"
 assert_not_contains "$out" "claude-code 2.3.1" "failed pull reports no version"
 
 out="$(run_update 0 "" CLAUDE_RUNTIME=apple)"

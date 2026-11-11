@@ -4,6 +4,7 @@
 # OS gate is deterministic regardless of the host running the tests.
 cd "$(dirname "$0")"
 source ./lib.sh
+setup_host_tools
 
 # run_ssh OS RUNTIME HOME [ENV=VAL ...] -> echoes the recorded run argv.
 # Stubs: `docker`/`container` (record argv), `uname` (report OS/-m arm64),
@@ -27,7 +28,7 @@ case "\$1" in -s) echo "$os" ;; -m) echo arm64 ;; *) echo "$os" ;; esac
 STUB
     chmod +x "$bin/uname"
     printf '#!/usr/bin/env bash\necho 26.0\n' > "$bin/sw_vers"; chmod +x "$bin/sw_vers"
-    env -i HOME="$home" PATH="$bin:/usr/bin:/bin" CLAUDE_FLAVOR=vertex \
+    env -i HOME="$home" PATH="$bin:$HOST_TOOLS" CLAUDE_FLAVOR=vertex \
         CLAUDE_RUNTIME="$runtime" "$@" \
         "$LAUNCHER" </dev/null >/dev/null 2>"$rec/err" || true
     cat "$rec/argv" 2>/dev/null

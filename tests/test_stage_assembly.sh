@@ -5,6 +5,7 @@
 # HOME with the optional host sources seeded (or not) by each case.
 cd "$(dirname "$0")"
 source ./lib.sh
+setup_host_tools
 
 # run_launch HOME -> echoes a REC dir holding:
 #   argv      : one docker-run arg per line
@@ -25,7 +26,7 @@ STUB
     chmod +x "$bin/docker"
     # Force docker so the recording stub (not a real runtime like Apple
     # `container`, if installed on the host) captures the run argv + staged dir.
-    env -i HOME="$home" PATH="$bin:/usr/bin:/bin" REC="$rec" \
+    env -i HOME="$home" PATH="$bin:$HOST_TOOLS" REC="$rec" \
         CLAUDE_FLAVOR=vertex CLAUDE_RUNTIME=docker \
         "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
     rm -rf "$bin"

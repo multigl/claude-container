@@ -3,6 +3,7 @@
 # run flags. Same recording-runtime-stub harness as test_ssh_forwarding.sh.
 cd "$(dirname "$0")"
 source ./lib.sh
+setup_host_tools
 
 # run_dns RUNTIME HOME [ENV=VAL ...] -> echoes the recorded run argv, then stderr.
 run_dns() {
@@ -22,7 +23,7 @@ case "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac
 STUB
     chmod +x "$bin/uname"
     printf '#!/usr/bin/env bash\necho 26.0\n' > "$bin/sw_vers"; chmod +x "$bin/sw_vers"
-    env -i HOME="$home" PATH="$bin:/usr/bin:/bin" CLAUDE_FLAVOR=personal \
+    env -i HOME="$home" PATH="$bin:$HOST_TOOLS" CLAUDE_FLAVOR=personal \
         CLAUDE_RUNTIME="$runtime" "$@" \
         "$LAUNCHER" </dev/null >/dev/null 2>"$rec/err" || true
     cat "$rec/argv" 2>/dev/null

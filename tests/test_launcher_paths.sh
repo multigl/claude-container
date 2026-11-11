@@ -3,6 +3,7 @@
 # plus first-launch seeding, migrate-memory and state-dir permissions.
 cd "$(dirname "$0")"
 source ./lib.sh
+setup_host_tools
 
 # Run --print-paths in an isolated HOME with a controlled env. Prints
 # "<scratchHOME>\n<launcher output>"; caller checks emptiness then removes the dir.
@@ -11,7 +12,7 @@ source ./lib.sh
 run_paths() {  # run_paths KEY=VAL...
     local home; home="$(mktemp -d)"
     local out
-    out="$(env -i HOME="$home" PATH="$PATH" "$@" "$LAUNCHER" --print-paths 2>/dev/null)"
+    out="$(env -i HOME="$home" PATH="$HOST_TOOLS" "$@" "$LAUNCHER" --print-paths 2>/dev/null)"
     printf '%s\n%s' "$home" "$out"
 }
 
@@ -39,7 +40,7 @@ rm -rf "$home"
 # --- --print-runtime resolves the runtime (docker stub present) ---
 rtbin="$(mktemp -d)"; printf '#!/usr/bin/env bash\ncase "$1 $2" in "info "*|"info") exit 0;; esac\nexit 0\n' > "$rtbin/docker"; chmod +x "$rtbin/docker"
 prhome="$(mktemp -d)"
-pr="$(env -i HOME="$prhome" PATH="$rtbin:/usr/bin:/bin" CLAUDE_FLAVOR=vertex "$LAUNCHER" --print-runtime 2>/dev/null)"
+pr="$(env -i HOME="$prhome" PATH="$rtbin:$HOST_TOOLS" CLAUDE_FLAVOR=vertex "$LAUNCHER" --print-runtime 2>/dev/null)"
 assert_contains "$pr" "RUNTIME=docker" "--print-runtime resolves docker when only docker present"
 rm -rf "$rtbin" "$prhome"
 
@@ -66,7 +67,7 @@ run_paths_with_conf() {  # run_paths_with_conf CONF_TEXT KEY=VAL...  (flavor via
     mkdir -p "$home/.config/claude-container/$flavor"
     printf '%s\n' "$conf" > "$home/.config/claude-container/$flavor/config.toml"
     local out
-    out="$(env -i HOME="$home" PATH="$PATH" "$@" "$LAUNCHER" --print-paths 2>/dev/null)"
+    out="$(env -i HOME="$home" PATH="$HOST_TOOLS" "$@" "$LAUNCHER" --print-paths 2>/dev/null)"
     printf '%s\n%s' "$home" "$out"
 }
 
@@ -109,7 +110,7 @@ run_paths_in() {  # run_paths_in DIR KEY=VAL...
     local d="$1"; shift
     local h; h="$(mktemp -d)"
     local o
-    o="$(cd "$d" && env -i HOME="$h" PATH="$PATH" "$@" "$LAUNCHER" --print-paths 2>/dev/null)"
+    o="$(cd "$d" && env -i HOME="$h" PATH="$HOST_TOOLS" "$@" "$LAUNCHER" --print-paths 2>/dev/null)"
     printf '%s\n%s' "$h" "$o"
 }
 cbase="$(mktemp -d)"
@@ -130,7 +131,7 @@ seed_config() {  # seed_config FLAVOR  -> prints "<mode>\n<seeded config.toml>"
     local flavor="$1" home bin config
     home="$(mktemp -d)"; bin="$(mktemp -d)"
     printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/docker"; chmod +x "$bin/docker"
-    env -i HOME="$home" PATH="$bin:/usr/bin:/bin" CLAUDE_FLAVOR="$flavor" CLAUDE_RUNTIME=docker \
+    env -i HOME="$home" PATH="$bin:$HOST_TOOLS" CLAUDE_FLAVOR="$flavor" CLAUDE_RUNTIME=docker \
         "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
     config="$home/.config/claude-container/$flavor/config.toml"
     stat -c '%a' "$config" 2>/dev/null || stat -f '%Lp' "$config" 2>/dev/null
@@ -161,7 +162,7 @@ migrate_run() {  # migrate_run HOME  -> prints merged stdout+stderr
     # a launcher that probes a runtime before dispatch.
     local bin; bin="$(mktemp -d)"
     printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/docker"; chmod +x "$bin/docker"
-    env -i HOME="$1" PATH="$bin:/usr/bin:/bin" CLAUDE_FLAVOR=vertex CLAUDE_RUNTIME=docker \
+    env -i HOME="$1" PATH="$bin:$HOST_TOOLS" CLAUDE_FLAVOR=vertex CLAUDE_RUNTIME=docker \
         "$LAUNCHER" migrate-memory </dev/null 2>&1
     rm -rf "$bin"
 }
@@ -194,7 +195,7 @@ rm -rf "$h"
 # migrate-memory is pure host-side (mv); it must work even when no runtime exists.
 noRt="$(mktemp -d)"          # empty state; no runtime on a minimal PATH
 mmhome="$(mktemp -d)"
-mmout="$(env -i HOME="$mmhome" PATH="/usr/bin:/bin" CLAUDE_FLAVOR=vertex "$LAUNCHER" migrate-memory 2>&1)"; mmrc=$?
+mmout="$(env -i HOME="$mmhome" PATH="$HOST_TOOLS" CLAUDE_FLAVOR=vertex "$LAUNCHER" migrate-memory 2>&1)"; mmrc=$?
 assert_eq "0" "$mmrc" "migrate-memory exits 0 without a runtime"
 assert_not_contains "$mmout" "no usable container runtime" "migrate-memory does not require a runtime"
 rm -rf "$noRt" "$mmhome"
@@ -208,7 +209,7 @@ perm_home="$(mktemp -d)"; perm_bin="$(mktemp -d)"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$perm_bin/docker"; chmod +x "$perm_bin/docker"
 mkdir -p "$perm_home/.local/state/claude-container/vertex/claude"
 chmod 777 "$perm_home/.local/state/claude-container/vertex/claude"
-env -i HOME="$perm_home" PATH="$perm_bin:/usr/bin:/bin" CLAUDE_FLAVOR=vertex CLAUDE_RUNTIME=docker \
+env -i HOME="$perm_home" PATH="$perm_bin:$HOST_TOOLS" CLAUDE_FLAVOR=vertex CLAUDE_RUNTIME=docker \
     "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
 mode="$(ls -ld "$perm_home/.local/state/claude-container/vertex/claude" | cut -c1-10)"
 assert_eq "drwx------" "$mode" "pre-existing loose STATE_CLAUDE_DIR is re-tightened to 0700"

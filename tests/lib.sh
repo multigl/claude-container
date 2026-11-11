@@ -49,3 +49,19 @@ _repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAUNCHER="${LAUNCHER_BIN:-$_repo_root/bin/claude-container}"
 [[ "$LAUNCHER" == /* ]] || LAUNCHER="$_repo_root/$LAUNCHER"
 launch() { "$LAUNCHER" "$@"; }
+
+# setup_host_tools sets HOST_TOOLS to a temp dir of symlinks to ordinary host
+# tools, for a stub-only PATH="$fakes:$HOST_TOOLS". It deliberately leaves out
+# docker, podman, container, gh and getenforce, so a launcher under test can
+# only reach the suite's fakes. Call once per suite, before any launch.
+setup_host_tools() {
+    local tool source
+    HOST_TOOLS="$(mktemp -d)"
+    trap 'rm -rf "$HOST_TOOLS"' EXIT
+    for tool in awk basename bash cat chmod cksum cp cut date dirname env find git grep \
+                head id jq ln ls mkdir mktemp mv readlink realpath rm rmdir rsync sed sh sort \
+                ssh-keygen stat sw_vers tail touch tr uname wc; do
+        source="$(command -v "$tool" 2>/dev/null)" || continue
+        [[ "$source" == /* ]] && ln -s "$source" "$HOST_TOOLS/$tool"
+    done
+}
