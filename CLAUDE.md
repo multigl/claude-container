@@ -150,7 +150,8 @@ version and pinned tag. On a dev machine set `image = "claude-<flavor>:latest"` 
 run local `just build` output.
 
 `claude-<flavor> update` runs, in order: (1) **self-update** — GitHub API latest
-release (uses `GH_TOKEN` if set); if its tag differs from the embedded version,
+release (uses `GH_TOKEN` if set, else the host's `gh auth token`; sent only to
+the API host); if its tag differs from the embedded version,
 download this OS/arch's asset + `SHA256SUMS`, verify, write a temp file in the
 resolved binary's directory (following symlinks), chmod 0755, rename over the old
 binary, and re-exec with the original `argv[0]` and `_CLAUDE_SELFUPDATED=1` (the

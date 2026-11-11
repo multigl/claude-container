@@ -158,7 +158,11 @@ func (a *app) selfUpdate() (code int, reexecuted bool) {
 		return 0, false
 	}
 	client := &http.Client{Timeout: 60 * time.Second}
-	release, err := selfupdate.Latest(client, apiBase, releaseRepo, goruntime.GOOS, goruntime.GOARCH, a.getenv("GH_TOKEN"))
+	token := a.getenv("GH_TOKEN")
+	if token == "" {
+		token = githubToken()
+	}
+	release, err := selfupdate.Latest(client, apiBase, releaseRepo, goruntime.GOOS, goruntime.GOARCH, token)
 	if err != nil {
 		fmt.Fprintf(a.stderr, "!! self-update: %v\n", err)
 		return 1, false

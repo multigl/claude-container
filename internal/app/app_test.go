@@ -395,8 +395,9 @@ func TestRun(t *testing.T) {
 }
 
 type fakeRelease struct {
-	server    *httptest.Server
-	downloads int
+	server        *httptest.Server
+	downloads     int
+	authorization string
 }
 
 // newFakeRelease answers the latest-release query with tag, or with a 500
@@ -408,6 +409,7 @@ func newFakeRelease(t *testing.T, tag string, failing bool, assetBytes []byte) *
 	sum := sha256.Sum256(assetBytes)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/multigl/claude-container/releases/latest", func(writer http.ResponseWriter, request *http.Request) {
+		release.authorization = request.Header.Get("Authorization")
 		if failing {
 			http.Error(writer, "boom", http.StatusInternalServerError)
 			return
@@ -609,6 +611,41 @@ func TestReexecArgs(t *testing.T) {
 const fakeGitHubCLIScript = `#!/bin/sh
 [ "$1 $2" = "auth token" ] && echo gho_from_keyring
 `
+
+func TestSelfUpdateToken(t *testing.T) {
+	tests := []struct {
+		name              string
+		installGitHubCLI  bool
+		environment       map[string]string
+		wantAuthorization string
+	}{
+		{"GH_TOKEN wins over gh", true, map[string]string{"GH_TOKEN": "gho_from_env"}, "Bearer gho_from_env"},
+		{"falls back to gh auth token", true, nil, "Bearer gho_from_keyring"},
+		{"no token anywhere sends none", false, nil, ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			if test.installGitHubCLI {
+				h.addFakeBinary(t, "gh", fakeGitHubCLIScript)
+			}
+			release := newFakeRelease(t, "v1.0.0", false, []byte("binary"))
+			originalVersion, originalAPIBase := buildinfo.Version, apiBase
+			t.Cleanup(func() { buildinfo.Version, apiBase = originalVersion, originalAPIBase })
+			buildinfo.Version = "v1.0.0"
+			apiBase = release.server.URL
+
+			got := h.invoke("claude-vertex", []string{"update"}, test.environment)
+
+			if got.code != 0 {
+				t.Fatalf("exit %d, stderr: %s", got.code, got.stderr)
+			}
+			if release.authorization != test.wantAuthorization {
+				t.Errorf("Authorization %q, want %q", release.authorization, test.wantAuthorization)
+			}
+		})
+	}
+}
 
 func TestLaunchGitHubToken(t *testing.T) {
 	tests := []struct {

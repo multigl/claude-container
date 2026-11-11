@@ -233,7 +233,8 @@ prints the release and the pinned tag. All three runtimes pull a missing image o
 `claude-<flavor> update` does three things in order:
 
 1. **Self-update.** It asks the GitHub API for the latest release (using
-   `GH_TOKEN` if set). If the tag differs from the binary's own, it downloads
+   `GH_TOKEN` if set, else the host's `gh auth token`; the token goes only to
+   the API host). If the tag differs from the binary's own, it downloads
    this OS and architecture's asset and `SHA256SUMS`, verifies the checksum,
    writes the new binary beside the old one, renames it into place, and
    re-executes it with `_CLAUDE_SELFUPDATED=1` so the step isn't repeated. If
