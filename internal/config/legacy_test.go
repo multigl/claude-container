@@ -94,6 +94,7 @@ func TestMigrate(t *testing.T) {
 			wantConfig:   Config{Env: map[string]string{"A": "1", "B": "2"}},
 			wantContains: []string{"# first\nA = \"1\"\n# second\nB = \"2\""},
 		},
+		{name: "env duplicate key last wins", env: "A=1\nA=2\n", wantConfig: Config{Env: map[string]string{"A": "2"}}, wantReport: []string{"\"A\""}},
 		{name: "env bare key reported", env: "PASSTHRU\nA=1\n", wantConfig: Config{Env: map[string]string{"A": "1"}}, wantReport: []string{"PASSTHRU"}},
 		{
 			name:       "mounts ro and rw",

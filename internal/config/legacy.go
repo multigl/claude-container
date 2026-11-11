@@ -137,7 +137,18 @@ func migrateLauncherConf(path string, lines []string, out *strings.Builder) []st
 
 func migrateEnv(path string, lines []string, out *strings.Builder) []string {
 	var report []string
-	for _, line := range lines {
+	// docker --env-file is last-wins, so only the final occurrence of a key is emitted.
+	lastLine := map[string]int{}
+	for index, line := range lines {
+		if key, _, found := strings.Cut(line, "="); found && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			key = strings.TrimSpace(key)
+			if previous, seen := lastLine[key]; seen {
+				report = append(report, fmt.Sprintf("%s: duplicate %q on line %d collapsed; last value (line %d) kept", path, key, previous+1, index+1))
+			}
+			lastLine[key] = index
+		}
+	}
+	for index, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
@@ -153,6 +164,7 @@ func migrateEnv(path string, lines []string, out *strings.Builder) []string {
 			report = append(report, fmt.Sprintf("%s: %q is a host passthrough with no value; dropped", path, key))
 		case !envKeyPattern.MatchString(key):
 			report = append(report, fmt.Sprintf("%s: invalid variable name %q dropped", path, key))
+		case lastLine[key] != index:
 		default:
 			out.WriteString(key + " = " + quoteTOMLString(value) + "\n")
 		}
