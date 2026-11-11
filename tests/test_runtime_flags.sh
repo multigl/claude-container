@@ -3,6 +3,7 @@
 # we assert the flags each driver contributes. `getenforce` is stubbed per case.
 cd "$(dirname "$0")"
 source ./lib.sh
+[[ "$LAUNCHER" == *.sh ]] || { echo "skip: bash-only"; exit 0; }
 export CR_SOURCED=1
 CRDIR="$(pwd)/../bin"
 

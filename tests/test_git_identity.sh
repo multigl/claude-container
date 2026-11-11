@@ -4,7 +4,6 @@
 # copies the staged gitconfig-identity out for inspection.
 cd "$(dirname "$0")"
 source ./lib.sh
-LAUNCHER="$(pwd)/../bin/claude-launcher.sh"
 
 # graft HOME [ENV=VAL ...] -> echoes the staged gitconfig-identity contents.
 # STUB_* env vars feed the git stub: STUB_NAME STUB_EMAIL STUB_FMT STUB_KEY
@@ -39,7 +38,7 @@ STUB
     chmod +x "$bin/docker"
     env -i HOME="$home" PATH="$bin:/usr/bin:/bin" \
         CLAUDE_FLAVOR=vertex CLAUDE_RUNTIME=docker "$@" \
-        bash "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
+        "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
     cat "$rec/identity" 2>/dev/null
     rm -rf "$bin" "$rec"
 }

@@ -4,6 +4,7 @@
 # CLAUDE_ENTRYPOINT_LIB=1 guard in bin/container-entrypoint.sh.
 cd "$(dirname "$0")"
 source ./lib.sh
+[[ "$LAUNCHER" == *.sh ]] || { echo "skip: bash-only"; exit 0; }
 LAUNCHER="$(pwd)/../bin/claude-launcher.sh"
 
 # Source in a scratch HOME and report which helpers exist + whether anything was written.

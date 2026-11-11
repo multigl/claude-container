@@ -6,6 +6,7 @@
 # stubbed as no-op binaries that log their argv, so no real image build runs.
 cd "$(dirname "$0")"
 source ./lib.sh
+[[ "$LAUNCHER" == *.sh ]] || { echo "skip: bash-only"; exit 0; }
 DISPATCH="$(pwd)/../bin/container-runtime.sh"
 
 build_with() {  # build_with EXTRA_ARGS...

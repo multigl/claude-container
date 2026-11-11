@@ -3,6 +3,7 @@
 # driver's rt_pull. Runtime binaries are stubs that log argv, so nothing is pulled.
 cd "$(dirname "$0")"
 source ./lib.sh
+[[ "$LAUNCHER" == *.sh ]] || { echo "skip: bash-only"; exit 0; }
 DISPATCH="$(pwd)/../bin/container-runtime.sh"
 REF="ghcr.io/multigl/claude-container:personal-latest"
 

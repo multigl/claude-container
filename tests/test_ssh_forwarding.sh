@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Launcher SSH-forwarding gate matrix. Drives bin/claude-launcher.sh with a
+# Launcher SSH-forwarding gate matrix. Drives the launcher with a
 # recording runtime stub that captures the run argv, plus stubbed `uname` so the
 # OS gate is deterministic regardless of the host running the tests.
 cd "$(dirname "$0")"
 source ./lib.sh
-LAUNCHER="$(pwd)/../bin/claude-launcher.sh"
 
 # run_ssh OS RUNTIME HOME [ENV=VAL ...] -> echoes the recorded run argv.
 # Stubs: `docker`/`container` (record argv), `uname` (report OS/-m arm64),
@@ -30,7 +29,7 @@ STUB
     printf '#!/usr/bin/env bash\necho 26.0\n' > "$bin/sw_vers"; chmod +x "$bin/sw_vers"
     env -i HOME="$home" PATH="$bin:/usr/bin:/bin" CLAUDE_FLAVOR=vertex \
         CLAUDE_RUNTIME="$runtime" "$@" \
-        bash "$LAUNCHER" </dev/null >/dev/null 2>"$rec/err" || true
+        "$LAUNCHER" </dev/null >/dev/null 2>"$rec/err" || true
     cat "$rec/argv" 2>/dev/null
     cat "$rec/err" 2>/dev/null
     rm -rf "$bin" "$rec"
@@ -65,25 +64,25 @@ assert_contains "$argv" "/tmp/a.sock:/ssh-agent" "linux+podman: socket bound"
 assert_contains "$argv" "ghcr.io/multigl/claude-container:vertex-latest"   "linux+podman: launcher reached rt_run"
 rm -rf "$h"
 
-# --- launcher.conf forward_ssh=true, linux+docker -> socket flags ---
+# --- config.toml forward_ssh = true, linux+docker -> socket flags ---
 h="$(mktemp -d)"; cfg="$h/.config/claude-container/vertex"; mkdir -p "$cfg"
-printf '# comment\nforward_ssh = true\n' > "$cfg/launcher.conf"
+printf '# comment\nforward_ssh = true\n' > "$cfg/config.toml"
 argv="$(run_ssh Linux docker "$h" SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_contains "$argv" "/tmp/a.sock:/ssh-agent" "conf forward_ssh=true: socket bound"
 rm -rf "$h"
 
-# --- launcher.conf uses the env-var-style name instead of the ini key ->
+# --- config.toml uses the env-var-style name instead of the top-level key ->
 # --- stays off (no accidental enable) AND warns, instead of silently no-op'ing ---
 h="$(mktemp -d)"; cfg="$h/.config/claude-container/vertex"; mkdir -p "$cfg"
-printf 'CLAUDE_FORWARD_SSH=1\n' > "$cfg/launcher.conf"
+printf 'CLAUDE_FORWARD_SSH = 1\n' > "$cfg/config.toml"
 argv="$(run_ssh Linux docker "$h" SSH_AUTH_SOCK=/tmp/a.sock)"
-assert_not_contains "$argv" "/ssh-agent" "wrong conf key name: forwarding stays off"
-assert_contains "$argv" "unrecognized key 'CLAUDE_FORWARD_SSH'" "wrong conf key name: warns"
+assert_not_contains "$argv" "/ssh-agent" "wrong config key name: forwarding stays off"
+assert_contains "$argv" "config.toml: unrecognized key 'CLAUDE_FORWARD_SSH'" "wrong config key name: warns"
 rm -rf "$h"
 
 # --- env=0 overrides conf=true -> off ---
 h="$(mktemp -d)"; cfg="$h/.config/claude-container/vertex"; mkdir -p "$cfg"
-printf 'forward_ssh = true\n' > "$cfg/launcher.conf"
+printf 'forward_ssh = true\n' > "$cfg/config.toml"
 argv="$(run_ssh Linux docker "$h" CLAUDE_FORWARD_SSH=0 SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_not_contains "$argv" "/ssh-agent" "env=0 overrides conf=true"
 assert_contains "$argv" "ghcr.io/multigl/claude-container:vertex-latest" "env=0 overrides conf=true: launcher reached rt_run"

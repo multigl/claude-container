@@ -11,3 +11,6 @@ __pycache__/
 
 # claude
 docs/superpowers/
+
+# Go launcher build output
+bin/claude-container
