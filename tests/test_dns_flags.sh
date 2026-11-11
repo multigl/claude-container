@@ -40,7 +40,7 @@ new_home() {
 h="$(new_home)"
 argv="$(run_dns apple "$h")"
 assert_not_contains "$argv" "--dns" "unset: no --dns flag"
-assert_contains "$argv" "claude-personal:latest" "unset: launcher reached rt_run"
+assert_contains "$argv" "ghcr.io/multigl/claude-container:personal-latest" "unset: launcher reached rt_run"
 rm -rf "$h"
 
 # --- env, one server ---

@@ -59,6 +59,41 @@ assert_contains "$out" "HOST_SETTINGS=/tmp/my.json"       "CLAUDE_SETTINGS overr
 assert_contains "$out" "HOST_MOUNTS_FILE=/tmp/my.mounts"  "CLAUDE_MOUNTS_FILE override honored"
 rm -rf "$home"
 
+# --- image resolution: CLAUDE_IMAGE > launcher.conf image > published GHCR default ---
+run_paths_with_conf() {  # run_paths_with_conf CONF_TEXT KEY=VAL...  (flavor via CLAUDE_FLAVOR)
+    local conf="$1"; shift
+    local home; home="$(mktemp -d)"
+    local flavor=personal kv
+    for kv in "$@"; do [[ "$kv" == CLAUDE_FLAVOR=* ]] && flavor="${kv#CLAUDE_FLAVOR=}"; done
+    mkdir -p "$home/.config/claude-container/$flavor"
+    printf '%s\n' "$conf" > "$home/.config/claude-container/$flavor/launcher.conf"
+    local out
+    out="$(env -i HOME="$home" PATH="$PATH" "$@" bash "$LAUNCHER" --print-paths 2>/dev/null)"
+    printf '%s\n%s' "$home" "$out"
+}
+
+image_of() { sed -n 's/^IMAGE=//p' <<<"$(tail -n +2 <<<"$1")"; }
+
+res="$(run_paths CLAUDE_FLAVOR=personal)"
+assert_eq "ghcr.io/multigl/claude-container:personal-latest" "$(image_of "$res")" "default image is published personal-latest"
+rm -rf "$(head -1 <<<"$res")"
+
+res="$(run_paths CLAUDE_FLAVOR=vertex)"
+assert_eq "ghcr.io/multigl/claude-container:vertex-latest" "$(image_of "$res")" "default image follows flavor"
+rm -rf "$(head -1 <<<"$res")"
+
+res="$(run_paths_with_conf "image = local-dev:1   # local dev" CLAUDE_FLAVOR=personal)"
+assert_eq "local-dev:1" "$(image_of "$res")" "launcher.conf image key (trimmed, comment stripped)"
+rm -rf "$(head -1 <<<"$res")"
+
+res="$(run_paths_with_conf "image = claude-personal:latest" CLAUDE_FLAVOR=personal CLAUDE_IMAGE=foo:bar)"
+assert_eq "foo:bar" "$(image_of "$res")" "CLAUDE_IMAGE beats launcher.conf image"
+rm -rf "$(head -1 <<<"$res")"
+
+res="$(run_paths_with_conf "image = local-dev:1" CLAUDE_FLAVOR=personal CLAUDE_IMAGE=)"
+assert_eq "local-dev:1" "$(image_of "$res")" "empty CLAUDE_IMAGE treated as unset"
+rm -rf "$(head -1 <<<"$res")"
+
 # --- per-project key + dir (keyed on the launcher's $PWD) ---
 # Assert the STRUCTURE (readable slug is a substring; dir = STATE_DIR/projects/<key>)
 # rather than re-deriving the exact key, so the test isn't tautological.

@@ -180,7 +180,6 @@ while [[ -h "$_src" ]]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
 
-IMAGE="${CLAUDE_IMAGE:-claude-${FLAVOR}:latest}"
 # --- host-side paths (XDG split) --------------------------------------------
 # Config (hand-edited, back-up-able) lives under XDG_CONFIG_HOME; state
 # (machine-managed, disposable) under XDG_STATE_HOME. Per-flavor subdir in each.
@@ -217,10 +216,18 @@ HOST_ENV_FILE="${CLAUDE_ENV_FILE:-${CFG_DIR}/env}"
 HOST_MOUNTS_FILE="${CLAUDE_MOUNTS_FILE:-${CFG_DIR}/mounts}"
 HOST_SETTINGS="${CLAUDE_SETTINGS:-${CFG_DIR}/settings.override.json}"
 # launcher.conf: host-side launcher settings (flat INI `key = value`, parsed not
-# sourced). Keys: forward_ssh (SSH agent forwarding toggle), dns (resolver list).
+# sourced). Keys: forward_ssh (SSH agent forwarding toggle), dns (resolver list),
+# image (container image ref, e.g. a local dev build).
 # No escape-hatch path override -- per-run env overrides are CLAUDE_FORWARD_SSH
 # and CLAUDE_DNS.
 HOST_LAUNCHER_CONF="${CFG_DIR}/launcher.conf"
+
+# Image precedence: CLAUDE_IMAGE env > launcher.conf `image` > the CI-published
+# image. `update` always pulls PUBLISHED_IMAGE, whatever the override.
+PUBLISHED_IMAGE="ghcr.io/multigl/claude-container:${FLAVOR}-latest"
+IMAGE="${CLAUDE_IMAGE:-}"
+[[ -n "$IMAGE" ]] || IMAGE="$(_conf_get image "$HOST_LAUNCHER_CONF")"
+[[ -n "$IMAGE" ]] || IMAGE="$PUBLISHED_IMAGE"
 
 # Flavor driver (fl_* functions). Mirrors the runtime dispatcher's driver split.
 # An unknown flavor is fatal here rather than silently landing in some `else`.
@@ -249,7 +256,7 @@ _ssh_forward_enabled() {
 # used where the ini key (forward_ssh) belongs, since the sibling `env` file uses
 # ALL_CAPS keys and it's an easy mix-up. Without this, forwarding just silently
 # never turns on and there's no signal pointing at the config file as the cause.
-_KNOWN_LAUNCHER_CONF_KEYS=" forward_ssh dns "
+_KNOWN_LAUNCHER_CONF_KEYS=" forward_ssh dns image "
 _conf_warn_unknown_keys() {  # _conf_warn_unknown_keys FILE
     local file="$1" line k
     [[ -f "$file" ]] || return 0
