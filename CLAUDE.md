@@ -111,7 +111,9 @@ docker/podman), symlinks `claude-<flavor>` beside the binary, then **pulls** eac
 flavor's image by calling `claude-<flavor> update`. It never builds, and there is
 no build fallback: a failed download or pull fails the install. There is no clone;
 if the old one at `~/.local/share/claude-container/src` exists it says so and
-leaves it. Flags: `--local <binary>` (install a binary built from the checkout;
+leaves it. Any `$BIN_DIR/claude-<flavor>` symlink that still points into that old
+clone is added to the flavor list (deduped), relinked and updated, so an upgrade
+doesn't strand vertex/gateway. Flags: `--local <binary>` (install a binary built from the checkout;
 used by `just install`), `--all`, `--flavor`, `--runtime`, `--no-apple-gate`,
 `--bin-dir`, `--dry-run` (`--prefix` and `--ref` are gone). With no flavor flag it
 installs **personal** (the default flavor). `just install` / `install-all` run
@@ -168,8 +170,8 @@ v1.6.1), as docker/podman do, so plain launches need no pull guard.
 justfile's `image` variable. Self-update uses only the standard library.
 
 Existing installs upgrade by re-running the `install.sh` one-liner once (the old
-bash `update` only pulled images and can't fetch the binary), then
-`claude-<flavor> update`.
+bash `update` only pulled images and can't fetch the binary); it migrates every
+flavor still linked into the old clone and runs `update` for each.
 
 ## How config seeding works
 

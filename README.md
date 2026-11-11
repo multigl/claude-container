@@ -68,15 +68,27 @@ instead. Force a runtime any time with `CLAUDE_RUNTIME=docker|podman|apple`.
 
 Earlier installs were a git clone of bash scripts, with config split across
 `launcher.conf`, `env` and `mounts`. The old `update` can't fetch the binary, so
-re-run the install one-liner once. After that:
+re-run the install one-liner once:
 
 ```sh
-claude-<flavor> update    # converts the old files into config.toml
+curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash
 ```
 
-`update` leaves `launcher.conf`, `env` and `mounts` where they are. Check
-`config.toml`, then delete them. Until `config.toml` exists, launching refuses and
-tells you to run `update`. You can also delete the old clone at
+It finds every `claude-<flavor>` command that still points into the old clone
+and relinks and updates each one, so `claude-vertex` and `claude-gateway` come
+along without extra flags. To pass flags through the pipe, use `bash -s --`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash -s -- --flavor vertex
+```
+
+The installer runs `claude-<flavor> update` for each flavor, which converts the
+old files into `config.toml`. `update` leaves `launcher.conf`, `env` and
+`mounts` where they are. Check `config.toml`, then delete them. Until
+`config.toml` exists, launching refuses and tells you to run `update`.
+
+Once the re-install has finished, delete the old clone at
 `~/.local/share/claude-container/src`.
 
 ## First run

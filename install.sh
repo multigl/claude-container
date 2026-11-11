@@ -54,9 +54,24 @@ sha256_of() {
     if [[ "$OS" == darwin ]]; then shasum -a 256 "$1" | cut -d' ' -f1; else sha256sum "$1" | cut -d' ' -f1; fi
 }
 
-if [[ -d "$OLD_CLONE" ]]; then
-    say "old clone at $OLD_CLONE can be removed (the launcher is now a single binary)"
-fi
+# --- flavors linked into the old clone ----------------------------------------
+# An upgrade from the bash install must relink every flavor it had, not just
+# the default, or those commands keep running the stale scripts.
+add_flavor() {
+    local existing
+    for existing in "${FLAVORS[@]}"; do [[ "$existing" == "$1" ]] && return; done
+    FLAVORS+=("$1")
+}
+for link in "$BIN_DIR"/claude-*; do
+    [[ -L "$link" ]] || continue
+    flavor="${link##*/claude-}"
+    case "$flavor" in personal|vertex|gateway) ;; *) continue ;; esac
+    link_target="$(readlink "$link")"
+    [[ "$link_target" == /* ]] || link_target="$BIN_DIR/$link_target"
+    [[ "$link_target" == "$OLD_CLONE"/* ]] || continue
+    add_flavor "$flavor"
+    if [[ "$DRYRUN" == 1 ]]; then plan "migrate: claude-$flavor"; else say "migrating claude-$flavor off the old clone"; fi
+done
 
 # --- binary ------------------------------------------------------------------
 TARGET="$BIN_DIR/claude-container"
@@ -118,6 +133,10 @@ for flavor in "${FLAVORS[@]}"; do
     say "updating $flavor …"
     CLAUDE_FLAVOR="$flavor" "$BIN_DIR/claude-$flavor" update
 done
+
+if [[ -d "$OLD_CLONE" ]]; then
+    say "old clone at $OLD_CLONE can be removed (the launcher is now a single binary)"
+fi
 
 if [[ "$DRYRUN" != 1 ]]; then
     say ""

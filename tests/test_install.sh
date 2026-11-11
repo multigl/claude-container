@@ -6,7 +6,7 @@ source ./lib.sh
 INSTALL="$(pwd)/../install.sh"
 setup_host_tools
 
-plan() {  # plan KEY=VAL ... [-- INSTALL_ARGS...]  (HAVE_APPLE, OSTYPE_STUB, ARCH_STUB, MACOS_MAJOR, CLAUDE_SKIP_APPLE_GATE, OLD_CLONE)
+plan() {  # plan KEY=VAL ... [-- INSTALL_ARGS...]  (HAVE_APPLE, OSTYPE_STUB, ARCH_STUB, MACOS_MAJOR, CLAUDE_SKIP_APPLE_GATE, OLD_CLONE, OLD_CLONE_LINKS)
     local extra=()
     while [[ $# -gt 0 ]]; do
         if [[ "$1" == -- ]]; then shift; extra=("$@"); break; fi
@@ -22,11 +22,21 @@ plan() {  # plan KEY=VAL ... [-- INSTALL_ARGS...]  (HAVE_APPLE, OSTYPE_STUB, ARC
     chmod +x "$fakes"/*
     [[ "${HAVE_APPLE-}" == 1 ]] || rm -f "$fakes/container"
     [[ "${OLD_CLONE-}" == 1 ]] && mkdir -p "$home/.local/share/claude-container/src"
+    # OLD_CLONE_LINKS: space-separated name=target pairs, as the bash installer
+    # (or a user) left them in the bin dir; a literal $HOME is the fake home.
+    local pair
+    for pair in ${OLD_CLONE_LINKS-}; do
+        mkdir -p "$home/.local/bin"
+        local link_target="${pair#*=}"
+        ln -s "${link_target//\$HOME/$home}" "$home/.local/bin/${pair%%=*}"
+    done
+    local bin_before
+    bin_before="$(ls -lA "$home/.local/bin" 2>/dev/null)"
     env -u CLAUDE_RUNTIME HOME="$home" PATH="$fakes:$HOST_TOOLS" bash "$INSTALL" --dry-run "${extra[@]+"${extra[@]}"}" 2>&1
     echo "rc=$?"
-    [[ -z "$(ls -A "$home/.local/bin" 2>/dev/null)" ]] || echo "SIDE EFFECT in bin dir"
+    [[ "$(ls -lA "$home/.local/bin" 2>/dev/null)" == "$bin_before" ]] || echo "SIDE EFFECT in bin dir"
     rm -rf "$fakes" "$home"
-    unset OSTYPE_STUB ARCH_STUB MACOS_MAJOR HAVE_APPLE CLAUDE_SKIP_APPLE_GATE OLD_CLONE
+    unset OSTYPE_STUB ARCH_STUB MACOS_MAJOR HAVE_APPLE CLAUDE_SKIP_APPLE_GATE OLD_CLONE OLD_CLONE_LINKS
 }
 
 # Linux/arm64: download, verify, install, symlink, update for the default flavor
@@ -86,6 +96,16 @@ assert_contains "$out" "PLAN install: " "--local still plans install"
 out="$(plan OSTYPE_STUB=Linux OLD_CLONE=1)"
 assert_contains "$out" "old clone at " "old clone is reported"
 assert_contains "$out" "can be removed" "old clone is not deleted, just flagged"
+
+# flavors linked into the old clone are relinked and updated, others left alone
+old_launcher='$HOME/.local/share/claude-container/src/bin/claude-launcher.sh'
+out="$(plan OSTYPE_STUB=Linux OLD_CLONE=1 "OLD_CLONE_LINKS=claude-vertex=$old_launcher claude-gateway=/elsewhere/claude claude-personal=$old_launcher")"
+assert_contains "$out" "PLAN migrate: claude-vertex" "old-clone vertex link is migrated"
+assert_contains "$out" "PLAN symlink: claude-vertex -> claude-container" "migrated vertex is relinked"
+assert_contains "$out" "PLAN update: vertex" "migrated vertex is updated"
+assert_not_contains "$out" "claude-gateway" "gateway linked elsewhere is left alone"
+assert_eq "1" "$(grep -c 'PLAN symlink: claude-personal' <<<"$out")" "personal is planned once, not duplicated"
+assert_not_contains "$out" "SIDE EFFECT" "migration dry-run touches nothing"
 
 # runtime handling
 out="$(plan OSTYPE_STUB=Linux)"
