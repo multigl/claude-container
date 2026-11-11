@@ -37,10 +37,11 @@ curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/insta
 
 That installs the **personal** flavor. Add `--all` for all three, or
 `--flavor vertex|gateway|personal` for one. Other flags: `--runtime
-docker|podman|apple`, `--prefix`, `--bin-dir`, `--ref`, `--dry-run`.
+docker|podman|apple`, `--bin-dir`, `--dry-run`.
 
-The installer clones the launcher scripts to `~/.local/share/claude-container/src`,
-symlinks `claude-<flavor>` into `~/.local/bin`, and pulls the prebuilt image from
+The installer downloads one prebuilt binary, `claude-container`, from the latest
+GitHub Release, checks its SHA-256, and puts it in `~/.local/bin`. It symlinks
+`claude-<flavor>` beside it and pulls the matching image from
 `ghcr.io/multigl/claude-container`. Nothing gets built on your machine. That
 matters behind network filters like Zscaler, where a container build can't reach
 apt or npm but a registry pull works.
@@ -50,7 +51,8 @@ You need:
 1. **A container runtime:** docker, podman, or Apple's `container`.
 2. **`~/.local/bin` on your `PATH`**, or pass `--bin-dir`.
 
-The wrapper picks a runtime in this order: Apple `container`, then docker, then
+Each binary is pinned to the image it was released with, so the two never drift
+apart. The wrapper picks a runtime in this order: Apple `container`, then docker, then
 podman. "Available" means installed and working.
 
 | OS    | docker | podman | Apple `container` |
@@ -61,6 +63,21 @@ podman. "Available" means installed and working.
 On a Mac that could run Apple `container` but doesn't have it, the installer
 stops and asks you to install it. Pass `--no-apple-gate` to use docker or podman
 instead. Force a runtime any time with `CLAUDE_RUNTIME=docker|podman|apple`.
+
+### Upgrading an existing install
+
+Earlier installs were a git clone of bash scripts, with config split across
+`launcher.conf`, `env` and `mounts`. The old `update` can't fetch the binary, so
+re-run the install one-liner once. After that:
+
+```sh
+claude-<flavor> update    # converts the old files into config.toml
+```
+
+`update` leaves `launcher.conf`, `env` and `mounts` where they are. Check
+`config.toml`, then delete them. Until `config.toml` exists, launching refuses and
+tells you to run `update`. You can also delete the old clone at
+`~/.local/share/claude-container/src`.
 
 ## First run
 
@@ -82,7 +99,7 @@ the token lives.
 
 ```sh
 claude-vertex auth                                # gcloud login: open the URL, paste the code back
-$EDITOR ~/.config/claude-container/vertex/env     # uncomment and set ANTHROPIC_VERTEX_PROJECT_ID
+$EDITOR ~/.config/claude-container/vertex/config.toml   # uncomment and set ANTHROPIC_VERTEX_PROJECT_ID under [env]
 cd ~/src/some-repo
 claude-vertex
 ```
@@ -93,8 +110,8 @@ container prints a banner at launch saying so.
 ### Gateway
 
 ```sh
-claude-gateway auth                               # first run seeds the env file
-$EDITOR ~/.config/claude-container/gateway/env    # set ANTHROPIC_BASE_URL, OKTA_ISSUER, OKTA_CLIENT_ID
+claude-gateway auth                               # first run seeds config.toml
+$EDITOR ~/.config/claude-container/gateway/config.toml   # under [env]: ANTHROPIC_BASE_URL, OKTA_ISSUER, OKTA_CLIENT_ID
 claude-gateway auth                               # Okta device login; approve the URL in your browser
 cd ~/src/some-repo
 claude-gateway
@@ -109,15 +126,18 @@ The wrapper reads its flavor from the name you call it by.
 | `claude-<flavor>` | Run `claude` in the current directory |
 | `claude-<flavor> -- <args>` | Pass flags through to `claude` |
 | `claude-<flavor> shell` | Open `bash` inside the container |
-| `claude-<flavor> update` | Pull the newest published image |
+| `claude-<flavor> update` | Update the binary to the latest release, then pull its image |
+| `claude-<flavor> doctor` | Check the runtime, image, credentials, `PATH`, and memory |
 | `claude-<flavor> auth` | Log in (one-time, or after `reset-auth`) |
 | `claude-<flavor> reset-auth` | Delete the flavor's stored credential |
 | `claude-<flavor> reseed` | Overwrite seeded settings and plugins with the image's copies; keeps history |
+| `claude-<flavor> --version` | Show the release version and the image it is pinned to |
 | `claude-<flavor> --print-paths` | Show every resolved path, the image, and the runtime |
 | `claude-<flavor> --print-runtime` | Show the chosen runtime and which ones are available |
 
-New images land on every merge to `main`, and a weekly job rebuilds when a new
-claude-code ships. Run `claude-<flavor> update` to pick them up.
+New releases land on every merge to `main`, and a weekly job publishes one when a
+new claude-code ships. Each release is a binary plus the images it runs. Run
+`claude-<flavor> update` to pick it up.
 (`claude-<flavor> -- update` still reaches Claude Code's own `update` command,
 which is disabled in the image.)
 
@@ -126,36 +146,57 @@ are kept per host directory, so each repo gets its own.
 
 ## Configuration
 
-Each flavor reads its config from `~/.config/claude-container/<flavor>/`
-(`$XDG_CONFIG_HOME` if set). The files are plain text and safe to back up. An
-environment variable overrides each one per run.
+Each flavor reads one file, `~/.config/claude-container/<flavor>/config.toml`
+(`$XDG_CONFIG_HOME` if set). The first run seeds it with the flavor's defaults,
+commented. It can hold credentials, so the wrapper keeps it at `0600`. Point
+`CLAUDE_CONFIG` at a different path to use a file from your dotfiles. That file
+must exist, and the wrapper never seeds into it.
 
-| File | Holds | Per-run override |
-|------|-------|------------------|
-| `launcher.conf` | How the wrapper starts the container | `CLAUDE_IMAGE`, `CLAUDE_DNS`, `CLAUDE_FORWARD_SSH` |
-| `env` | Environment for the container: endpoints, model pins, MCP credentials | `CLAUDE_ENV_FILE` |
-| `mounts` | Extra host directories to expose | `CLAUDE_MOUNTS_FILE` |
-| `settings.override.json` | Claude Code settings tweaks | `CLAUDE_SETTINGS` |
-
-### launcher.conf
-
-Flat `key = value` lines; `#` starts a comment. The wrapper warns about keys it
-doesn't know, which catches typos like `CLAUDE_FORWARD_SSH = true`.
-
-```ini
-# Run a different image than ghcr.io/multigl/claude-container:<flavor>-latest,
+```toml
+# Run a different image than the one this binary is pinned to,
 # e.g. one you built locally with `just build`.
-image = claude-personal:latest
-
-# DNS servers for the container, comma or space separated.
-dns = 1.1.1.1, 8.8.8.8
+image = "claude-personal:latest"
 
 # Forward your host SSH agent (for SSH push and SSH commit signing).
 forward_ssh = true
+
+# DNS servers for the container.
+dns = ["1.1.1.1", "8.8.8.8"]
+
+# Environment for the container: endpoints, model pins, MCP credentials.
+[env]
+ANTHROPIC_MODEL = "claude-opus-5[1m]"
+CONTEXT7_API_KEY = ""
+
+# Extra host directories, at /mnt/approved/<basename>. Read-only by default.
+[[mounts]]
+path = "~/src/shared-notes"
+
+[[mounts]]
+path = "~/scratch"
+rw = true
 ```
 
-**`image`.** The env var `CLAUDE_IMAGE` wins over this key. `update` always pulls
-the published image and warns if an override means you won't run it.
+Every key is optional. Unknown top-level keys produce a warning that lists the
+known ones, and TOML syntax errors stop the launch with a line number.
+
+Some settings can also be set per run with an environment variable, which wins
+over the file. Precedence is environment variable, then `config.toml`, then the
+default.
+
+| Setting | `config.toml` | Per-run override |
+|---------|---------------|------------------|
+| Image | `image` | `CLAUDE_IMAGE` |
+| SSH agent forwarding | `forward_ssh` | `CLAUDE_FORWARD_SSH` |
+| DNS servers | `dns` | `CLAUDE_DNS` |
+| Container runtime | | `CLAUDE_RUNTIME` |
+| Flavor | | `CLAUDE_FLAVOR` |
+| Path to `config.toml` | | `CLAUDE_CONFIG` |
+| Path to `settings.override.json` | | `CLAUDE_SETTINGS` |
+
+**`image`.** Without it, the wrapper runs the image its binary was released
+with. `update` pulls that pinned image and warns if an override means you won't
+run it.
 
 **`dns`.** Use it when lookups time out inside the container but work on the host.
 We've seen this with Apple `container` behind Zscaler: the VM's default resolver
@@ -167,27 +208,22 @@ agent, including 1Password), and with docker or podman on Linux. Docker Desktop
 on macOS can't forward the agent, so the wrapper warns and skips it there. See
 [Git & GitHub](#git--github-inside-the-container) for signing.
 
-### env
+**`[env]`.** Read once at container start, so edits need a fresh session. Values
+must be strings, and a value can't contain a newline. The seeded file holds the
+flavor's defaults and blank MCP credential lines (`CONTEXT7_API_KEY`, plus
+`JIRA_*` and `CONFLUENCE_*` for vertex and gateway). The wrapper never rewrites it
+after that, not even on `reseed`. MCP credentials can also come from your host
+`~/.claude.json`, which the container reads at boot.
 
-Passed to the container with `--env-file` and read once at container start, so
-edits need a fresh session. The wrapper seeds this file on the first run with
-the flavor's defaults and blank MCP credential lines (`CONTEXT7_API_KEY`, plus
-`JIRA_*` and `CONFLUENCE_*` for vertex and gateway). It never rewrites the file after that, not even on
-`reseed`. MCP credentials can also come from your host `~/.claude.json`, which the
-container reads at boot.
-
-### mounts
-
-Only `$PWD` is mounted by default. List more host directories here, one per line.
-Each appears at `/mnt/approved/<basename>`, read-only unless the line ends in
-` :rw`:
-
-```
-~/src/shared-notes
-~/scratch :rw
-```
+**`[[mounts]]`.** Only `$PWD` is mounted by default. A leading `~` is expanded.
+A missing directory, or two entries with the same basename, is skipped with a
+warning.
 
 ### settings.override.json
+
+Claude Code settings, deep-merged onto the seeded `settings.json` at every
+launch. It stays a separate JSON file rather than part of `config.toml`, because
+it is Claude Code's own settings format. For example, to try another model:
 
 Claude Code settings, deep-merged onto the seeded `settings.json` at every
 launch. For example, to try another model:
@@ -221,10 +257,10 @@ The container uses your host git and GitHub setup, with no second login.
   from your host with `git -C "$PWD" config`, so an `includeIf gitdir:` rule for
   work-vs-personal identities picks the right one for the repo you're in. Your
   host `~/.gitconfig` is never mounted.
-- **`gh` and HTTPS push.** The wrapper passes `gh auth token` in as `GH_TOKEN`, so
-  `gh pr` and `gh api` work. `gh` is also the git credential helper, so HTTPS
+- **`gh` and HTTPS push.** The wrapper reads `gh auth token` from your host at each launch and
+  passes it in as `GH_TOKEN`, so `gh pr` and `gh api` work. `gh` is also the git credential helper, so HTTPS
   `git push` works. Use HTTPS remotes unless you forward SSH.
-- **SSH push and signing.** With `forward_ssh = true`, SSH remotes work. If your
+- **SSH push and signing.** With `forward_ssh = true` in `config.toml`, SSH remotes work. If your
   host signs commits with `gpg.format = ssh`, the container signs with the same
   key through the forwarded agent.
 - **gpg or x509 signing (a YubiKey, say).** No secret key can be forwarded into
@@ -247,18 +283,18 @@ The container uses your host git and GitHub setup, with no second login.
 
 ### Vertex
 
-The model and region pins live in the seeded `env` file, so you can change them
+The model and region pins live in the seeded `[env]` table of `config.toml`, so you can change them
 without rebuilding.
 
 | Var | Default | Where |
 |-----|---------|-------|
 | `CLAUDE_CODE_USE_VERTEX` | `1` | image |
-| `ANTHROPIC_VERTEX_PROJECT_ID` | placeholder, **must be set** | `env` |
-| `CLOUD_ML_REGION` | `us` | image and `env` |
-| `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL` | `claude-opus-5[1m]` | `env` |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `claude-sonnet-5` | `env` |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claude-haiku-4-5` | `env` |
-| `VERTEX_REGION_CLAUDE_HAIKU_4_5` | `us-east5` | `env` |
+| `ANTHROPIC_VERTEX_PROJECT_ID` | placeholder, **must be set** | `[env]` |
+| `CLOUD_ML_REGION` | `us` | image and `[env]` |
+| `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL` | `claude-opus-5[1m]` | `[env]` |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `claude-sonnet-5` | `[env]` |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claude-haiku-4-5` | `[env]` |
+| `VERTEX_REGION_CLAUDE_HAIKU_4_5` | `us-east5` | `[env]` |
 
 Every pin is a US region, for data residency. Opus 5 and Sonnet 5 need a
 multi-region, so they use `us`; Haiku 4.5 uses `us-east5`. The pins matter
@@ -267,13 +303,13 @@ beyond residency. Unpinned, Vertex's background model defaults to
 session titles and web-search summaries. The `[1m]` suffix turns on the 1M
 context window for Opus.
 
-If your env file predates these pins, add them by hand. The wrapper seeds the
+If your `config.toml` predates these pins, add them by hand. The wrapper seeds the
 file only when it's missing.
 
 ### Gateway
 
 The gateway flavor is a generic Anthropic-format client pointed at your gateway.
-Set these in `~/.config/claude-container/gateway/env`:
+Set these under `[env]` in `~/.config/claude-container/gateway/config.toml`:
 
 | Var | Notes |
 |-----|-------|
@@ -318,16 +354,11 @@ Run `/status` inside Claude:
 
 ## Troubleshooting
 
-`just doctor` checks the runtime, image, credentials, `PATH`, and memory for a
-flavor. It needs [`just`](https://github.com/casey/just) and runs from the
-installed checkout:
+`claude-<flavor> doctor` checks the runtime, image, credentials, `PATH`, memory,
+and any leftover pre-`config.toml` files for that flavor.
 
-```sh
-FLAVOR=vertex just -f ~/.local/share/claude-container/src/justfile doctor
-```
-
-**`update` fails with "pull failed".** You're offline, or the registry is
-unreachable. Check `claude-<flavor> --print-runtime`, then retry.
+**`update` fails with "pull failed" or a release error.** You're offline, or the
+registry or GitHub is unreachable. Check `claude-<flavor> --print-runtime`, then retry.
 
 **`/status` shows the wrong provider.** Stale state. Delete
 `~/.local/state/claude-container/<flavor>` and relaunch.
@@ -346,7 +377,7 @@ on stdout and diagnostics on stderr.
 **personal: logged out, or a `.credentials.json` permissions warning.** Run
 `claude-personal reset-auth`, then `claude-personal auth`.
 
-**DNS lookups time out inside the container.** Set `dns` in `launcher.conf`.
+**DNS lookups time out inside the container.** Set `dns` in `config.toml`.
 
 **Permission errors writing to a mounted directory.** The container maps its user
 to your host uid. If files still land with the wrong owner, run
@@ -356,12 +387,11 @@ to your host uid. If files still land with the wrong owner, run
 
 ### From local builds
 
-The wrapper used to run a locally built `claude-<flavor>:latest`. It now runs the
-published `ghcr.io/multigl/claude-container:<flavor>-latest`. To keep running a
-local build, add this to that flavor's `launcher.conf`:
+The wrapper runs the image its binary is pinned to. To keep running a local
+build, add this to that flavor's `config.toml`:
 
-```ini
-image = claude-personal:latest
+```toml
+image = "claude-personal:latest"
 ```
 
 ### From the old `~/.claude-<flavor>*` layout
@@ -380,6 +410,8 @@ mkdir -p "$state/claude"
 mv ~/.claude-$flavor.json   "$state/claude/claude.json" 2>/dev/null || true
 ```
 
+Then run `claude-<flavor> update` to turn `env` and `mounts` into `config.toml`.
+
 ### From a shared memory bucket or named credential volumes
 
 Older versions shared one memory and `/resume` bucket across every repo, and kept
@@ -393,13 +425,12 @@ credentials in named docker volumes. Two one-time commands move them:
 ## Uninstall
 
 ```sh
-rm -f ~/.local/bin/claude-vertex ~/.local/bin/claude-gateway ~/.local/bin/claude-personal
-rm -rf ~/.local/share/claude-container                              # the installed scripts
+rm -f ~/.local/bin/claude-vertex ~/.local/bin/claude-gateway ~/.local/bin/claude-personal ~/.local/bin/claude-container
 rm -rf ~/.config/claude-container ~/.local/state/claude-container   # config, state, credentials
 ```
 
 Then remove the images with your runtime, for example
-`docker image rm ghcr.io/multigl/claude-container:personal-latest`.
+`docker image rm ghcr.io/multigl/claude-container:<tag>` (`claude-<flavor> --version` shows the tag).
 
 ## Developing
 
