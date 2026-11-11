@@ -54,3 +54,9 @@ rt_build_cmd() {  # rt_build_cmd <flavor> <image> <context>
 }
 
 rt_run() { podman run "$@"; }
+
+rt_pull() { podman pull "$1"; }  # rt_pull <image>
+
+rt_image_label() {  # rt_image_label <image> <key>  -> label value or nothing
+    podman image inspect -f "{{ index .Config.Labels \"$2\" }}" "$1" 2>/dev/null
+}

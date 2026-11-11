@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Installer for the containerized Claude distribution.
+# Installer for the containerized Claude distribution. Installs the launcher
+# scripts and pulls the CI-published images; it never builds an image.
 #   curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash
 # or, from a checkout:  just install  ->  install.sh --local
 set -euo pipefail
@@ -72,20 +73,21 @@ if [[ "$RT" == none ]]; then
 fi
 say "runtime: $RT"
 
-# --- build -------------------------------------------------------------------
-for f in "${FLAVORS[@]}"; do
-    img="claude-$f:latest"
-    if [[ "$DRYRUN" == 1 ]]; then plan "build: $f ($img) via $RT"; continue; fi
-    say "building $f …"
-    CLAUDE_RUNTIME="$RT" "$SRC/bin/container-runtime.sh" build --flavor "$f" --image "$img" --context "$SRC"
-done
-
 # --- symlink wrappers --------------------------------------------------------
 [[ "$DRYRUN" == 1 ]] || mkdir -p "$BIN_DIR" 2>/dev/null || true
 for f in "${FLAVORS[@]}"; do
     if [[ "$DRYRUN" == 1 ]]; then plan "symlink: claude-$f -> $SRC/bin/claude-launcher.sh"; continue; fi
     ln -sf "$SRC/bin/claude-launcher.sh" "$BIN_DIR/claude-$f"
     say "installed: $BIN_DIR/claude-$f"
+done
+
+# --- pull published images --------------------------------------------------
+# Through the just-installed wrapper's `update`, so the pull lives in one place.
+for f in "${FLAVORS[@]}"; do
+    ref="ghcr.io/multigl/claude-container:$f-latest"
+    if [[ "$DRYRUN" == 1 ]]; then plan "pull: $f ($ref) via $RT"; continue; fi
+    say "pulling $f …"
+    CLAUDE_RUNTIME="$RT" CLAUDE_FLAVOR="$f" "$BIN_DIR/claude-$f" update
 done
 
 if [[ "$DRYRUN" != 1 ]]; then

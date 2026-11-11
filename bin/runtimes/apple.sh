@@ -32,3 +32,9 @@ rt_build_cmd() {  # rt_build_cmd <flavor> <image> <context>
 }
 
 rt_run() { container run "$@"; }
+
+rt_pull() { container image pull "$1"; }  # rt_pull <image>
+
+# apple's `image inspect` output shape isn't pinned down; report nothing rather
+# than guess at it.
+rt_image_label() { :; }

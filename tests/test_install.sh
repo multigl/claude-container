@@ -5,8 +5,12 @@ cd "$(dirname "$0")"
 source ./lib.sh
 INSTALL="$(pwd)/../install.sh"
 
-plan() {  # plan KEY=VAL ...  (HAVE_APPLE, OSTYPE_STUB, ARCH_STUB, MACOS_MAJOR, CLAUDE_SKIP_APPLE_GATE)
-    for kv in "$@"; do export "$kv"; done
+plan() {  # plan KEY=VAL ... [-- INSTALL_ARGS...]  (HAVE_APPLE, OSTYPE_STUB, ARCH_STUB, MACOS_MAJOR, CLAUDE_SKIP_APPLE_GATE)
+    local extra=()
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == -- ]]; then shift; extra=("$@"); break; fi
+        export "$1"; shift
+    done
     local bin; bin="$(mktemp -d)"
     for rt in docker podman container; do
         printf '#!/usr/bin/env bash\ncase "$1 $2" in "info "*|"info"|"system status") exit 0;; esac\nexit 0\n' > "$bin/$rt"
@@ -20,7 +24,7 @@ plan() {  # plan KEY=VAL ...  (HAVE_APPLE, OSTYPE_STUB, ARCH_STUB, MACOS_MAJOR, 
     # Hermetic PATH: only the stub dir + system coreutils, so the real
     # /usr/local/bin (or /opt/homebrew/bin) `container`/`docker` can't leak in and
     # defeat the "no apple installed" simulation (container stub deleted above).
-    env HOME="$home" PATH="$bin:/usr/bin:/bin" bash "$INSTALL" --local --dry-run 2>&1
+    env HOME="$home" PATH="$bin:/usr/bin:/bin" bash "$INSTALL" --local --dry-run "${extra[@]+"${extra[@]}"}" 2>&1
     rm -rf "$bin" "$home"
     unset OSTYPE_STUB ARCH_STUB MACOS_MAJOR HAVE_APPLE CLAUDE_SKIP_APPLE_GATE
 }
@@ -28,9 +32,16 @@ plan() {  # plan KEY=VAL ...  (HAVE_APPLE, OSTYPE_STUB, ARCH_STUB, MACOS_MAJOR, 
 # Linux, docker present -> plan builds the default flavor via docker, symlinks wrappers
 out="$(plan OSTYPE_STUB=Linux)"
 assert_contains "$out" "runtime: docker"          "linux dry-run resolves docker"
-assert_contains "$out" "build: personal"          "dry-run plans the default (personal) build"
+assert_contains "$out" "pull: personal (ghcr.io/multigl/claude-container:personal-latest)" "dry-run plans the default (personal) pull"
+assert_not_contains "$out" "build:"               "installer never plans a build"
 assert_contains "$out" "symlink: claude-personal" "dry-run plans wrapper symlink"
 assert_not_contains "$out" "APPLE GATE"           "linux never apple-gates"
+
+# --all -> pulls every flavor's published image
+out="$(plan OSTYPE_STUB=Linux -- --all)"
+assert_contains "$out" "pull: vertex (ghcr.io/multigl/claude-container:vertex-latest)"   "--all plans vertex pull"
+assert_contains "$out" "pull: gateway (ghcr.io/multigl/claude-container:gateway-latest)" "--all plans gateway pull"
+assert_contains "$out" "pull: personal"            "--all plans personal pull"
 
 # eligible macOS without apple -> APPLE GATE stop
 out="$(plan OSTYPE_STUB=Darwin HAVE_APPLE=)"
@@ -43,6 +54,23 @@ assert_contains "$out" "runtime: docker"          "skip-apple-gate proceeds on m
 # Intel mac (ineligible) -> no gate, docker
 out="$(plan OSTYPE_STUB=Darwin ARCH_STUB=x86_64 HAVE_APPLE=)"
 assert_not_contains "$out" "APPLE GATE"           "intel mac ineligible -> no gate"
+
+# --- real (non-dry) install: a failed pull stops the installer, no build fallback ---
+fh="$(mktemp -d)"; fbin="$(mktemp -d)"
+cat > "$fbin/docker" <<'S'
+#!/usr/bin/env bash
+case "$1 $2" in "info "*|"info") exit 0;; esac
+[[ "$1" == pull ]] && exit 1
+[[ "$1" == build ]] && { echo "BUILD CALLED"; exit 0; }
+exit 0
+S
+printf '#!/usr/bin/env bash\n[[ "$1" == "-m" ]] && { echo x86_64; exit 0; }\necho Linux\n' > "$fbin/uname"
+chmod +x "$fbin/docker" "$fbin/uname"
+out="$(env HOME="$fh" PATH="$fbin:/usr/bin:/bin" bash "$INSTALL" --local --bin-dir "$fh/bin" 2>&1)"; rc=$?
+assert_eq "1" "$([[ $rc -ne 0 ]] && echo 1 || echo 0)" "failed pull fails the install"
+assert_contains "$out" "pull failed for ghcr.io/multigl/claude-container:personal-latest" "install surfaces the pull failure"
+assert_not_contains "$out" "BUILD CALLED" "no build fallback on pull failure"
+rm -rf "$fh" "$fbin"
 
 # --- dry-run creates no side effects (BIN_DIR must not be mkdir'd) ---
 drh="$(mktemp -d)"; drbin="$(mktemp -d)"

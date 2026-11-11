@@ -1,0 +1,153 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # 03:00 UTC Monday = Sunday evening in US time zones.
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE_REPO: ghcr.io/multigl/claude-container
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq rsync
+      - name: pytest (gateway Okta helper)
+        run: uv run pytest -q
+      - name: bash suites
+        run: tests/run.sh
+
+  plan:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      sha7: ${{ steps.resolve.outputs.sha7 }}
+      build: ${{ steps.resolve.outputs.build }}
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve claude-code version and decide whether to build
+        id: resolve
+        run: |
+          version="$(npm view @anthropic-ai/claude-code version)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha7=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          build=true
+          if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+            # Skip only when every flavor already carries npm's latest, so a
+            # publish that failed partway still gets retried. Missing or
+            # unreadable image -> empty label -> build.
+            build=false
+            for flavor in personal vertex gateway; do
+              published="$(docker buildx imagetools inspect "$IMAGE_REPO:$flavor-latest" --format '{{json .Image}}' 2>/dev/null \
+                | jq -r '(if has("config") then . else .["linux/amd64"] end).config.Labels["org.opencontainers.image.version"] // empty' 2>/dev/null || true)"
+              [[ "$published" == "$version" ]] || build=true
+              echo "$flavor-latest claude-code: ${published:-<none>}" >> "$GITHUB_STEP_SUMMARY"
+            done
+            echo "npm latest: $version, build: $build" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: plan
+    # -latest is what every install pulls, so only main may move it.
+    if: needs.plan.outputs.build == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      SHA7: ${{ needs.plan.outputs.sha7 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Sequential flavors in one builder so the shared `base` stage builds once;
+      # each flavor exports its own cache scope (an export covers only that build).
+      - name: personal
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: Containerfile
+          target: personal
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ env.VERSION }}
+          # Set here, not as a Containerfile ARG: a per-commit ARG would bust the
+          # cache of every layer after it.
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE_REPO }}:personal-latest
+            ${{ env.IMAGE_REPO }}:personal-${{ env.VERSION }}-${{ env.SHA7 }}
+          cache-from: type=gha,scope=cc-personal
+          cache-to: type=gha,scope=cc-personal,mode=max
+      - name: vertex
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: Containerfile
+          target: vertex
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ env.VERSION }}
+          # Set here, not as a Containerfile ARG: a per-commit ARG would bust the
+          # cache of every layer after it.
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE_REPO }}:vertex-latest
+            ${{ env.IMAGE_REPO }}:vertex-${{ env.VERSION }}-${{ env.SHA7 }}
+          cache-from: |
+            type=gha,scope=cc-vertex
+            type=gha,scope=cc-personal
+          cache-to: type=gha,scope=cc-vertex,mode=max
+      - name: gateway
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: Containerfile
+          target: gateway
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ env.VERSION }}
+          # Set here, not as a Containerfile ARG: a per-commit ARG would bust the
+          # cache of every layer after it.
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE_REPO }}:gateway-latest
+            ${{ env.IMAGE_REPO }}:gateway-${{ env.VERSION }}-${{ env.SHA7 }}
+          cache-from: |
+            type=gha,scope=cc-gateway
+            type=gha,scope=cc-personal
+          cache-to: type=gha,scope=cc-gateway,mode=max

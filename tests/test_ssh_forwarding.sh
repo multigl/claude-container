@@ -40,7 +40,7 @@ STUB
 h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"
 argv="$(run_ssh Linux docker "$h" SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_not_contains "$argv" "/ssh-agent" "toggle off: no socket bind"
-assert_contains "$argv" "claude-vertex:latest" "toggle off: launcher reached rt_run"
+assert_contains "$argv" "ghcr.io/multigl/claude-container:vertex-latest" "toggle off: launcher reached rt_run"
 rm -rf "$h"
 
 # --- env override ON, linux+docker -> socket flags ---
@@ -55,14 +55,14 @@ h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"
 argv="$(run_ssh Linux docker "$h" CLAUDE_FORWARD_SSH=1)"
 assert_not_contains "$argv" "/ssh-agent"                        "no-agent: no socket bind"
 assert_contains "$argv" "SSH_AUTH_SOCK is unset"               "no-agent: warns it was skipped"
-assert_contains "$argv" "claude-vertex:latest"                 "no-agent: launcher reached rt_run"
+assert_contains "$argv" "ghcr.io/multigl/claude-container:vertex-latest"                 "no-agent: launcher reached rt_run"
 rm -rf "$h"
 
 # --- env override ON, linux+podman -> socket flags ---
 h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"
 argv="$(run_ssh Linux podman "$h" CLAUDE_FORWARD_SSH=1 SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_contains "$argv" "/tmp/a.sock:/ssh-agent" "linux+podman: socket bound"
-assert_contains "$argv" "claude-vertex:latest"   "linux+podman: launcher reached rt_run"
+assert_contains "$argv" "ghcr.io/multigl/claude-container:vertex-latest"   "linux+podman: launcher reached rt_run"
 rm -rf "$h"
 
 # --- launcher.conf forward_ssh=true, linux+docker -> socket flags ---
@@ -86,14 +86,14 @@ h="$(mktemp -d)"; cfg="$h/.config/claude-container/vertex"; mkdir -p "$cfg"
 printf 'forward_ssh = true\n' > "$cfg/launcher.conf"
 argv="$(run_ssh Linux docker "$h" CLAUDE_FORWARD_SSH=0 SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_not_contains "$argv" "/ssh-agent" "env=0 overrides conf=true"
-assert_contains "$argv" "claude-vertex:latest" "env=0 overrides conf=true: launcher reached rt_run"
+assert_contains "$argv" "ghcr.io/multigl/claude-container:vertex-latest" "env=0 overrides conf=true: launcher reached rt_run"
 rm -rf "$h"
 
 # --- Darwin + docker (unsupported) -> warn + skip (no socket flags) ---
 h="$(mktemp -d)"; mkdir -p "$h/.config/claude-container/vertex"
 argv="$(run_ssh Darwin docker "$h" CLAUDE_FORWARD_SSH=1 SSH_AUTH_SOCK=/tmp/a.sock)"
 assert_not_contains "$argv" "/ssh-agent" "darwin+docker: unsupported, no socket bind"
-assert_contains "$argv" "claude-vertex:latest" "darwin+docker: launcher reached rt_run"
+assert_contains "$argv" "ghcr.io/multigl/claude-container:vertex-latest" "darwin+docker: launcher reached rt_run"
 assert_contains "$argv" "SSH forwarding unsupported" "darwin+docker: warns on skip"
 rm -rf "$h"
 

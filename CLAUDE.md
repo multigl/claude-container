@@ -2,6 +2,9 @@
 
 Guidance for Claude Code when working in this repo.
 
+User-facing docs live in `README.md` (running it); the contributor overview is
+`ARCHITECTURE.md`. Keep both in step with changes described here.
+
 ## What this is
 
 A **containerized Claude Code** distribution. It builds Claude Code into a Docker
@@ -78,12 +81,37 @@ Detects OS/arch, resolves a runtime, applies a macOS **apple gate** (on an
 Apple-Silicon macOS 26+ host without Apple `container` installed it stops and tells
 you to install it + re-run; skip with `--no-apple-gate` or
 `CLAUDE_SKIP_APPLE_GATE=1`; ineligible hosts fall through to docker/podman), clones
-the repo, builds the image(s) via the dispatcher, and symlinks `claude-<flavor>`
-into `~/.local/bin`. Flags: `--local` (skip clone; used by `just install`), `--all`,
+the repo (scripts only), symlinks `claude-<flavor>` into `~/.local/bin`, then
+**pulls** each flavor's published image by calling `claude-<flavor> update`. It
+never builds, and there is no build fallback: a failed pull (offline, package
+private) fails the install. Flags: `--local` (skip clone; used by `just install`), `--all`,
 `--flavor`, `--runtime`, `--no-apple-gate`, `--prefix`, `--bin-dir`, `--ref`,
 `--dry-run`. With no flavor flag it installs **personal** (the default flavor).
 `just install` = `install.sh --local --flavor <flavor>`;
-`just install-all` = `install.sh --local --all`.
+`just install-all` = `install.sh --local --all` (both pull, neither builds).
+
+### Published images, CI, and image selection
+
+`.github/workflows/ci.yml` runs `uv run pytest -q` + `tests/run.sh` on every PR
+and push. On push to `main`, `workflow_dispatch`, and a weekly cron
+(`0 3 * * 1`, Sunday evening US time), it builds all three flavors for
+`linux/amd64` + `linux/arm64` and pushes `ghcr.io/multigl/claude-container`
+tagged `<flavor>-latest` and `<flavor>-<claude-version>-<sha7>`. CI resolves
+the claude-code version once from npm and passes it as `CLAUDE_CODE_VERSION`,
+so tag, `org.opencontainers.image.version` label, and installed binary agree.
+The weekly run reads that label off the published `personal-latest` and
+builds only when npm's latest differs. Plugin SHAs are not bumped by CI.
+
+The image the launcher runs: `CLAUDE_IMAGE` env (non-empty) > `launcher.conf`
+`image` key > `ghcr.io/multigl/claude-container:<flavor>-latest`
+(`PUBLISHED_IMAGE`). `--print-paths` shows the result as `IMAGE=`. On a dev
+machine set `image = claude-<flavor>:latest` to run local `just build` output.
+`claude-<flavor> update` always pulls `PUBLISHED_IMAGE` through `rt_pull`
+(never builds) and warns when an override means plain launches won't use it;
+`claude-<flavor> -- update` still reaches in-container `claude update`. Apple
+`container run` auto-pulls a missing image (verified v1.6.1), as docker/podman
+do, so plain launches need no pull guard. `just doctor`'s `== image ==` checks
+the launcher's resolved `IMAGE`, not the justfile's `image` variable.
 
 ## How config seeding works
 
@@ -253,9 +281,11 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
 - **claude-code is version-pinned; auto-update is OFF** (`DISABLE_AUTOUPDATER=1` in
   the `Containerfile` base). In-container self-update can't work — global npm install
   is root-owned but the process is non-root (EACCES), and `--rm` would discard it
-  anyway. **Move the version forward with `just update`** (resolves the latest npm
-  version and rebuilds pinned to it via the `CLAUDE_CODE_VERSION` build arg; set
-  that env var to pin an exact version). `just doctor` shows the image's version.
+  anyway. Installed machines move forward with **`claude-<flavor> update`** (pulls
+  the CI-published image; see "Published images, CI, and image selection"). On a
+  dev machine, **`just update`** resolves the latest npm version and rebuilds
+  locally pinned to it via the `CLAUDE_CODE_VERSION` build arg (set that env var
+  to pin an exact version).
 - **Extra host files beyond `$PWD`.** The launcher bind-mounts `$PWD → /workspace`
   only. To expose more host dirs, list them (one path per line) in
   `~/.config/claude-container/<flavor>/mounts`; each is mounted at

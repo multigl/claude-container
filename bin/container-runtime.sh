@@ -7,6 +7,7 @@
 #   container-runtime.sh --resolve        # print chosen runtime or "none"
 #   container-runtime.sh build ARGS...    # build via the resolved driver
 #     --flavor F --image I [--context DIR] [--no-cache]
+#   container-runtime.sh pull --image I   # pull via the resolved driver
 # When sourced (CR_SOURCED=1), it defines functions and does not act.
 set -uo pipefail
 
@@ -83,6 +84,18 @@ if [[ "${CR_SOURCED:-0}" != 1 ]]; then
             echo ">> [$rt] $cmd"
             eval "$cmd"
             ;;
-        *) echo "usage: container-runtime.sh --resolve | build --flavor F --image I [--context DIR] [--no-cache]" >&2; exit 2 ;;
+        pull)
+            shift
+            image=""
+            while [[ $# -gt 0 ]]; do case "$1" in
+                --image) image="$2"; shift 2 ;;
+                *) shift ;;
+            esac; done
+            rt="$(cr_resolve)"; [[ "$rt" == none ]] && { echo "no runtime" >&2; exit 1; }
+            cr_load_driver "$rt"
+            echo ">> [$rt] pull $image"
+            rt_pull "$image"
+            ;;
+        *) echo "usage: container-runtime.sh --resolve | build --flavor F --image I [--context DIR] [--no-cache] | pull --image I" >&2; exit 2 ;;
     esac
 fi
