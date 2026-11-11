@@ -41,3 +41,7 @@ finish() {
     printf '%s: %d run, %d failed\n' "${0##*/}" "$_tests_run" "$_tests_failed"
     [[ "$_tests_failed" -eq 0 ]]
 }
+
+# Launcher under test; Task 9b flips the default to bin/claude-container.
+LAUNCHER="${LAUNCHER_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/claude-launcher.sh}"
+launch() { "$LAUNCHER" "$@"; }
