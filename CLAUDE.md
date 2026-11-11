@@ -2,6 +2,9 @@
 
 Guidance for Claude Code when working in this repo.
 
+User-facing docs live in `README.md` (running it); the contributor overview is
+`ARCHITECTURE.md`. Keep both in step with changes described here.
+
 ## What this is
 
 A **containerized Claude Code** distribution. It builds Claude Code into a Docker
