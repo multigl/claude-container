@@ -147,7 +147,7 @@ The wrapper reads its flavor from the name you call it by.
 | `claude-<flavor> --print-paths` | Show every resolved path, the image, and the runtime |
 | `claude-<flavor> --print-runtime` | Show the chosen runtime and which ones are available |
 
-New releases land on every merge to `main`, and a weekly job publishes one when a
+New releases land on every merge to `main` that changes more than docs, and a weekly job publishes one when a
 new claude-code ships. Each release is a binary plus the images it runs. Run
 `claude-<flavor> update` to pick it up.
 (`claude-<flavor> -- update` still reaches Claude Code's own `update` command,
