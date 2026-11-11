@@ -210,7 +210,7 @@ jobs:
           for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
             CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" \
               go build -trimpath \
-                -ldflags "-X github.com/multigl/claude-container/internal/buildinfo.Version=v${VERSION}-${SHA7} -X github.com/multigl/claude-container/internal/buildinfo.ImageSuffix=${VERSION}-${SHA7}" \
+                -ldflags "-X github.com/multigl/claude-container/internal/buildinfo.Version=v${VERSION}-${SHA7} -X github.com/multigl/claude-container/internal/buildinfo.ImageSuffix=${VERSION}-${SHA7} -X github.com/multigl/claude-container/internal/buildinfo.ImageRepo=${IMAGE_REPO}" \
                 -o "dist/claude-container_${target%/*}_${target#*/}" ./cmd/claude-container
           done
           (cd dist && sha256sum claude-container_* > SHA256SUMS)

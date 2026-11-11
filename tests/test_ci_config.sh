@@ -48,5 +48,6 @@ assert_contains "$release_job" 'GOOS="${target%/*}" GOARCH="${target#*/}"' "rele
 assert_contains "$release_job" 'dist/claude-container_${target%/*}_${target#*/}' "release names assets claude-container_<os>_<arch>"
 assert_contains "$release_job" "CGO_ENABLED=0" "release builds are static"
 assert_contains "$release_job" "buildinfo.Version=v\$" "release stamps the tag as Version"
+assert_contains "$release_job" 'buildinfo.ImageRepo=${IMAGE_REPO}' "release stamps the published image repo"
 
 finish
