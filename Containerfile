@@ -61,6 +61,16 @@ RUN mkdir -p /etc/ssh \
 ARG CLAUDE_CODE_VERSION=latest
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
+# OCI labels. After the npm layer so a VCS_REF change doesn't bust it. CI passes
+# an exact CLAUDE_CODE_VERSION; `update` and the weekly CI check read
+# org.opencontainers.image.version back off the published image.
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.source="https://github.com/multigl/claude-container" \
+      org.opencontainers.image.title="claude-container" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${CLAUDE_CODE_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+
 # uv + mcp-atlassian. uv tool install drops the executable in
 # UV_TOOL_BIN_DIR; pointed at /usr/local/bin so the seed config can
 # reference a stable path. uv handles fetching its own managed Python.
