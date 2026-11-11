@@ -2,6 +2,10 @@
 # Run every tests/test_*.sh, aggregate pass/fail into a single exit code.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
+(cd "$here/.." && go build -o "$here/../bin/claude-container" ./cmd/claude-container) || {
+    echo "!! go build failed" >&2
+    exit 1
+}
 rc=0
 for t in "$here"/test_*.sh; do
     echo "== ${t##*/} =="

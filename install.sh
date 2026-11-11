@@ -1,46 +1,30 @@
 #!/usr/bin/env bash
-# Installer for the containerized Claude distribution. Installs the launcher
-# scripts and pulls the CI-published images; it never builds an image.
+# Installer for the containerized Claude distribution. Downloads the release
+# binary, links claude-<flavor> to it, and pulls the CI-published images; it
+# never builds an image.
 #   curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash
-# or, from a checkout:  just install  ->  install.sh --local
+# or, from a checkout:  just install  ->  install.sh --local bin/claude-container
 set -euo pipefail
 
-REPO="multigl/claude-container"
-REF="${CLAUDE_INSTALL_REF:-main}"
-PREFIX="${INSTALL_DIR:-$HOME/.local/share/claude-container/src}"
+RELEASE_URL="https://github.com/multigl/claude-container/releases/latest/download"
 BIN_DIR="${CLAUDE_BIN_DIR:-$HOME/.local/bin}"
+OLD_CLONE="$HOME/.local/share/claude-container/src"
 FLAVORS=(personal)
-LOCAL=0 DRYRUN=0 NO_APPLE_GATE="${CLAUDE_SKIP_APPLE_GATE:-0}"
+LOCAL_BINARY="" DRYRUN=0 NO_APPLE_GATE="${CLAUDE_SKIP_APPLE_GATE:-0}"
 
 while [[ $# -gt 0 ]]; do case "$1" in
-    --local) LOCAL=1; shift ;;
+    --local) LOCAL_BINARY="${2:?--local needs a path to a built claude-container}"; shift 2 ;;
     --dry-run) DRYRUN=1; shift ;;
     --all) FLAVORS=(personal vertex gateway); shift ;;
-    --flavor) FLAVORS=("$2"); shift 2 ;;
-    --runtime) export CLAUDE_RUNTIME="$2"; shift 2 ;;
+    --flavor) FLAVORS=("${2:?--flavor needs a name}"); shift 2 ;;
+    --runtime) export CLAUDE_RUNTIME="${2:?--runtime needs a name}"; shift 2 ;;
     --no-apple-gate) NO_APPLE_GATE=1; shift ;;
-    --prefix) PREFIX="$2"; shift 2 ;;
-    --bin-dir) BIN_DIR="$2"; shift 2 ;;
-    --ref) REF="$2"; shift 2 ;;
+    --bin-dir) BIN_DIR="${2:?--bin-dir needs a path}"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
 esac; done
 
 say() { printf '%s\n' "$*"; }
 plan() { printf 'PLAN %s\n' "$*"; }
-
-# Locate the source tree: cwd for --local, else the clone target.
-if [[ "$LOCAL" == 1 ]]; then SRC="$(cd "$(dirname "$0")" && pwd)"; else SRC="$PREFIX"; fi
-
-# --- runtime detection (reuse the dispatcher when the tree is available) -----
-detect_runtime() {
-    if [[ -x "$SRC/bin/container-runtime.sh" ]]; then
-        CLAUDE_RUNTIME="${CLAUDE_RUNTIME:-}" "$SRC/bin/container-runtime.sh" --resolve
-    else
-        if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then echo docker
-        elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then echo podman
-        else echo none; fi
-    fi
-}
 
 apple_eligible() { [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] && [[ "$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)" -ge 26 ]]; }
 
@@ -53,45 +37,109 @@ if apple_eligible && ! command -v container >/dev/null 2>&1 && [[ "$NO_APPLE_GAT
     exit 3
 fi
 
-# --- fetch (remote mode) -----------------------------------------------------
-# Clone BEFORE runtime detection so detect_runtime can use the cloned tree's
-# dispatcher (bin/container-runtime.sh) — which is what resolves Apple 'container'.
-if [[ "$LOCAL" != 1 ]]; then
-    if [[ "$DRYRUN" == 1 ]]; then plan "fetch: $REPO@$REF -> $PREFIX";
+# --- platform ----------------------------------------------------------------
+case "$(uname -s)" in
+    Darwin) OS=darwin ;;
+    Linux) OS=linux ;;
+    *) echo "unsupported OS: $(uname -s) (need Darwin or Linux)" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+    x86_64|amd64) ARCH=amd64 ;;
+    arm64|aarch64) ARCH=arm64 ;;
+    *) echo "unsupported architecture: $(uname -m) (need x86_64 or arm64)" >&2; exit 1 ;;
+esac
+ASSET="claude-container_${OS}_${ARCH}"
+
+sha256_of() {
+    if [[ "$OS" == darwin ]]; then shasum -a 256 "$1" | cut -d' ' -f1; else sha256sum "$1" | cut -d' ' -f1; fi
+}
+
+# --- flavors linked into the old clone ----------------------------------------
+# An upgrade from the bash install must relink every flavor it had, not just
+# the default, or those commands keep running the stale scripts.
+add_flavor() {
+    local existing
+    for existing in "${FLAVORS[@]}"; do [[ "$existing" == "$1" ]] && return; done
+    FLAVORS+=("$1")
+}
+for link in "$BIN_DIR"/claude-*; do
+    [[ -L "$link" ]] || continue
+    flavor="${link##*/claude-}"
+    case "$flavor" in personal|vertex|gateway) ;; *) continue ;; esac
+    link_target="$(readlink "$link")"
+    [[ "$link_target" == /* ]] || link_target="$BIN_DIR/$link_target"
+    [[ "$link_target" == "$OLD_CLONE"/* ]] || continue
+    add_flavor "$flavor"
+    if [[ "$DRYRUN" == 1 ]]; then plan "migrate: claude-$flavor"; else say "migrating claude-$flavor off the old clone"; fi
+done
+
+# --- binary ------------------------------------------------------------------
+TARGET="$BIN_DIR/claude-container"
+if [[ "$DRYRUN" == 1 ]]; then
+    if [[ -n "$LOCAL_BINARY" ]]; then
+        plan "install: $TARGET from $LOCAL_BINARY"
     else
-        mkdir -p "$(dirname "$PREFIX")"
-        if [[ -d "$PREFIX/.git" ]]; then git -C "$PREFIX" pull --ff-only;
-        else git clone --branch "$REF" "https://github.com/$REPO.git" "$PREFIX"; fi
+        plan "download: $ASSET"
+        plan "verify: SHA256SUMS"
+        plan "install: $TARGET"
     fi
-    SRC="$PREFIX"
+else
+    mkdir -p "$BIN_DIR"
+    # Same directory as the target so the final mv is an atomic rename.
+    STAGING="$(mktemp -d "$BIN_DIR/.claude-container-install.XXXXXX")"
+    trap 'rm -rf "$STAGING"' EXIT
+    if [[ -n "$LOCAL_BINARY" ]]; then
+        cp "$LOCAL_BINARY" "$STAGING/claude-container"
+    else
+        say "downloading $ASSET …"
+        curl -fsSL -o "$STAGING/claude-container" "$RELEASE_URL/$ASSET"
+        curl -fsSL -o "$STAGING/SHA256SUMS" "$RELEASE_URL/SHA256SUMS"
+        expected="$(awk -v asset="$ASSET" '$2 == asset { print $1 }' "$STAGING/SHA256SUMS")"
+        if [[ -z "$expected" ]]; then echo "no checksum for $ASSET in SHA256SUMS" >&2; exit 1; fi
+        if [[ "$(sha256_of "$STAGING/claude-container")" != "$expected" ]]; then
+            echo "checksum mismatch for $ASSET" >&2; exit 1
+        fi
+    fi
+    chmod 755 "$STAGING/claude-container"
+    mv -f "$STAGING/claude-container" "$TARGET"
+    say "installed: $TARGET"
 fi
 
-RT="$(detect_runtime)"
-if [[ "$RT" == none ]]; then
-    say "No usable container runtime. Install docker or podman (or Apple 'container' on macOS 26+)."
-    exit 1
+# --- runtime -----------------------------------------------------------------
+if [[ -n "${CLAUDE_RUNTIME:-}" ]]; then
+    say "runtime: $CLAUDE_RUNTIME"
+elif [[ "$DRYRUN" == 1 ]]; then
+    plan "runtime: detect via claude-container --print-runtime"
+else
+    RT="$("$TARGET" --print-runtime 2>/dev/null | sed -n 's/^RUNTIME=//p')" || true
+    if [[ -z "$RT" || "$RT" == none ]]; then
+        say "No usable container runtime. Install docker or podman (or Apple 'container' on macOS 26+)."
+        exit 1
+    fi
+    say "runtime: $RT"
+    export CLAUDE_RUNTIME="$RT"
 fi
-say "runtime: $RT"
 
-# --- symlink wrappers --------------------------------------------------------
-[[ "$DRYRUN" == 1 ]] || mkdir -p "$BIN_DIR" 2>/dev/null || true
-for f in "${FLAVORS[@]}"; do
-    if [[ "$DRYRUN" == 1 ]]; then plan "symlink: claude-$f -> $SRC/bin/claude-launcher.sh"; continue; fi
-    ln -sf "$SRC/bin/claude-launcher.sh" "$BIN_DIR/claude-$f"
-    say "installed: $BIN_DIR/claude-$f"
+# --- symlinks and image pull -------------------------------------------------
+for flavor in "${FLAVORS[@]}"; do
+    if [[ "$DRYRUN" == 1 ]]; then plan "symlink: claude-$flavor -> claude-container"; continue; fi
+    ln -sf claude-container "$BIN_DIR/claude-$flavor"
+    say "linked: $BIN_DIR/claude-$flavor"
 done
 
-# --- pull published images --------------------------------------------------
-# Through the just-installed wrapper's `update`, so the pull lives in one place.
-for f in "${FLAVORS[@]}"; do
-    ref="ghcr.io/multigl/claude-container:$f-latest"
-    if [[ "$DRYRUN" == 1 ]]; then plan "pull: $f ($ref) via $RT"; continue; fi
-    say "pulling $f …"
-    CLAUDE_RUNTIME="$RT" CLAUDE_FLAVOR="$f" "$BIN_DIR/claude-$f" update
+# Through the just-installed command's `update`, so the pull lives in one place.
+for flavor in "${FLAVORS[@]}"; do
+    if [[ "$DRYRUN" == 1 ]]; then plan "update: $flavor"; continue; fi
+    say "updating $flavor …"
+    CLAUDE_FLAVOR="$flavor" "$BIN_DIR/claude-$flavor" update
 done
+
+if [[ -d "$OLD_CLONE" ]]; then
+    say "old clone at $OLD_CLONE can be removed (the launcher is now a single binary)"
+fi
 
 if [[ "$DRYRUN" != 1 ]]; then
     say ""
     say "Done. Ensure $BIN_DIR is on PATH, then:"
-    for f in "${FLAVORS[@]}"; do say "  claude-$f auth   # one-time login"; done
+    for flavor in "${FLAVORS[@]}"; do say "  claude-$flavor auth   # one-time login"; done
 fi

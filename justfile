@@ -7,124 +7,102 @@ here       := justfile_directory()
 default:
     @just --list --unsorted
 
+# Build the launcher binary into bin/claude-container
+build-launcher:
+    cd {{here}} && go build -o bin/claude-container ./cmd/claude-container
+
+# Build one image with the resolved runtime. Apple's CLI is `container`; all three
+# take the same build flags. CLAUDE_CODE_VERSION, when set, pins claude-code.
+_image-build target image no_cache="": build-launcher
+    @rt="$({{here}}/bin/claude-container --print-runtime | sed -n 's/^RUNTIME=//p')"; \
+        bin="$rt"; [ "$rt" = apple ] && bin=container; \
+        [ -n "$rt" ] && [ "$rt" != none ] || { echo "no runtime" >&2; exit 1; }; \
+        echo ">> [$rt] build {{target}} -> {{image}}"; \
+        $bin build -f {{here}}/Containerfile --target {{target}} -t {{image}} {{no_cache}} \
+            ${CLAUDE_CODE_VERSION:+--build-arg CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION"} {{here}}
+
 # Build the {{flavor}} image (FLAVOR=personal|vertex|gateway) via the resolved runtime
-build:
-    {{here}}/bin/container-runtime.sh build --flavor {{flavor}} --image {{image}} --context {{here}}
+build: (_image-build flavor image)
 
 # Rebuild the {{flavor}} image without cache (via the resolved runtime)
-rebuild:
-    {{here}}/bin/container-runtime.sh build --flavor {{flavor}} --image {{image}} --context {{here}} --no-cache
+rebuild: (_image-build flavor image "--no-cache")
 
 # Local dev: rebuild {{flavor}} pinned to the latest published claude-code. The
 # container's claude-code is deliberately non-self-updating (pinned + ephemeral +
 # non-root). Installed machines don't build: `claude-<flavor> update` pulls the
 # CI-published image instead. Override the version with CLAUDE_CODE_VERSION.
-update:
+update: build-launcher
     ver="${CLAUDE_CODE_VERSION:-$(npm view @anthropic-ai/claude-code version)}"; \
-    CLAUDE_CODE_VERSION="$ver" {{here}}/bin/container-runtime.sh build --flavor {{flavor}} --image {{image}} --context {{here}}; \
+    CLAUDE_CODE_VERSION="$ver" just _image-build {{flavor}} {{image}}; \
     echo ">> built {{image}} with claude-code $ver"
 
 # Build the vertex image
-build-vertex:
-    {{here}}/bin/container-runtime.sh build --flavor vertex --image claude-vertex:latest --context {{here}}
+build-vertex: (_image-build "vertex" "claude-vertex:latest")
 
 # Build the gateway image
-build-gateway:
-    {{here}}/bin/container-runtime.sh build --flavor gateway --image claude-gateway:latest --context {{here}}
+build-gateway: (_image-build "gateway" "claude-gateway:latest")
 
 # Build the personal image
-build-personal:
-    {{here}}/bin/container-runtime.sh build --flavor personal --image claude-personal:latest --context {{here}}
+build-personal: (_image-build "personal" "claude-personal:latest")
 
 # Build all images (shared base layer is cached, so each additional one is cheap)
 build-all: build-vertex build-gateway build-personal
 
 # Rebuild the vertex image without cache (via the resolved runtime)
-rebuild-vertex:
-    {{here}}/bin/container-runtime.sh build --flavor vertex --image claude-vertex:latest --context {{here}} --no-cache
+rebuild-vertex: (_image-build "vertex" "claude-vertex:latest" "--no-cache")
 
 # Rebuild the gateway image without cache (via the resolved runtime)
-rebuild-gateway:
-    {{here}}/bin/container-runtime.sh build --flavor gateway --image claude-gateway:latest --context {{here}} --no-cache
+rebuild-gateway: (_image-build "gateway" "claude-gateway:latest" "--no-cache")
 
 # Rebuild the personal image without cache (via the resolved runtime)
-rebuild-personal:
-    {{here}}/bin/container-runtime.sh build --flavor personal --image claude-personal:latest --context {{here}} --no-cache
+rebuild-personal: (_image-build "personal" "claude-personal:latest" "--no-cache")
 
 # Rebuild all images from scratch (base built no-cache once, then reused)
-rebuild-all:
-    {{here}}/bin/container-runtime.sh build --flavor vertex --image claude-vertex:latest --context {{here}} --no-cache
-    {{here}}/bin/container-runtime.sh build --flavor gateway --image claude-gateway:latest --context {{here}}
-    {{here}}/bin/container-runtime.sh build --flavor personal --image claude-personal:latest --context {{here}}
+rebuild-all: rebuild-vertex build-gateway build-personal
 
 # One-time login for {{flavor}} (gcloud ADC, or Okta device login) -> cred bind dir
-auth:
-    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh auth
+auth: build-launcher
+    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-container auth
 
-# Run all test suites: gateway Okta helper (pytest) + bash suites (merge, paths)
+# Run all test suites: pytest, Go unit tests, then the bash suites
 test:
     uv run pytest -q
+    cd {{here}} && go test ./...
     {{here}}/tests/run.sh
 
 # Run `claude` against the current directory (uses {{flavor}})
-run:
-    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh
+run: build-launcher
+    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-container
 
 # Open a bash shell inside the container
-shell:
-    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh shell
+shell: build-launcher
+    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-container shell
 
 # Overwrite host config's seeded files (settings + plugins) from the image
-reseed:
-    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh reseed
+reseed: build-launcher
+    CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-container reseed
 
-# Symlink wrapper to {{bin_dir}}/claude-{{flavor}}
-install:
-    {{here}}/install.sh --local --flavor {{flavor}}
+# Install the binary and the claude-{{flavor}} link into {{bin_dir}}
+install: build-launcher
+    {{here}}/install.sh --local {{here}}/bin/claude-container --flavor {{flavor}}
 
-# Symlink ALL flavor commands (claude-vertex + claude-gateway + claude-personal) to the launcher
-install-all:
-    {{here}}/install.sh --local --all
+# Install the binary and ALL flavor links (claude-vertex + claude-gateway + claude-personal)
+install-all: build-launcher
+    {{here}}/install.sh --local {{here}}/bin/claude-container --all
 
-# Remove the wrapper symlinks
+# Remove the flavor links and the binary
 uninstall:
-    rm -f {{bin_dir}}/claude-vertex {{bin_dir}}/claude-gateway {{bin_dir}}/claude-personal
+    rm -f {{bin_dir}}/claude-vertex {{bin_dir}}/claude-gateway {{bin_dir}}/claude-personal {{bin_dir}}/claude-container
 
 # Wipe the {{flavor}} credentials (forces re-auth). Paths come from the flavor driver.
-reset-auth:
-    @CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh reset-auth
+reset-auth: build-launcher
+    @CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-container reset-auth
 
 # Remove the {{flavor}} image (via the resolved runtime)
-clean:
-    @rt="$({{here}}/bin/container-runtime.sh --resolve)"; bin="$rt"; [ "$rt" = apple ] && bin=container; \
-        [ "$rt" = none ] || $bin image rm {{image}} || true
+clean: build-launcher
+    @rt="$({{here}}/bin/claude-container --print-runtime | sed -n 's/^RUNTIME=//p')"; bin="$rt"; [ "$rt" = apple ] && bin=container; \
+        [ -z "$rt" ] || [ "$rt" = none ] || $bin image rm {{image}} || true
 
 # Self-check: runtime resolved, image built, flavor auth present, wrapper on PATH
-doctor:
-    @echo "== runtime =="
-    @rt="$({{here}}/bin/container-runtime.sh --resolve)"; echo "  resolved: $rt"; \
-        for c in apple docker podman; do \
-            CR_SOURCED=1 bash -c 'source {{here}}/bin/container-runtime.sh; cr_available '"$c"' && echo "  available: '"$c"'"' || true; \
-        done
-    @echo "== image ({{flavor}}) =="
-    @rt="$({{here}}/bin/container-runtime.sh --resolve)"; bin="$rt"; [ "$rt" = apple ] && bin=container; \
-        img="$(CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh --print-paths | sed -n 's/^IMAGE=//p')"; \
-        case "$img" in ghcr.io/multigl/claude-container:*) hint="run 'claude-{{flavor}} update'" ;; \
-            *) hint="run 'just build' (FLAVOR={{flavor}}), or drop the image override" ;; esac; \
-        if [ "$rt" = none ]; then echo "  SKIP: no runtime"; \
-        elif $bin image inspect "$img" >/dev/null 2>&1; then echo "  ok: $img present"; \
-        else echo "  MISSING: $img -- $hint"; fi
-    @echo "== auth ({{flavor}}) =="
-    @CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh doctor-auth
-    @echo "== wrapper on PATH =="
-    @command -v claude-{{flavor}} >/dev/null \
-        && echo "  ok: $(command -v claude-{{flavor}})" \
-        || echo "  MISSING: run 'just install' (or add {{bin_dir}} to PATH)"
-    @echo "== memory ({{flavor}}) =="
-    @paths="$(CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh --print-paths)"; \
-        STATE_CLAUDE_DIR="$(printf '%s\n' "$paths" | sed -n 's/^STATE_CLAUDE_DIR=//p')"; \
-        echo "  global tier: $STATE_CLAUDE_DIR/memory-global"; \
-        if [ -n "$(ls -A "$STATE_CLAUDE_DIR/projects/-workspace" 2>/dev/null)" ]; then \
-            echo "  WARN: legacy shared bucket present ($STATE_CLAUDE_DIR/projects/-workspace)"; \
-            echo "        run 'claude-{{flavor}} migrate-memory' from the owning repo"; \
-        else echo "  ok: no legacy shared bucket"; fi
+doctor: build-launcher
+    @CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-container doctor

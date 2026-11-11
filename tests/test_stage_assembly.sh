@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Tests for the per-run stage directory that replaces the launcher's single-file
-# bind mounts. Drives bin/claude-launcher.sh with a recording `docker` stub that
+# bind mounts. Drives the launcher with a recording `docker` stub that
 # captures the run argv and snapshots the staged dir's contents, in an isolated
 # HOME with the optional host sources seeded (or not) by each case.
 cd "$(dirname "$0")"
 source ./lib.sh
-LAUNCHER="$(pwd)/../bin/claude-launcher.sh"
+setup_host_tools
 
 # run_launch HOME -> echoes a REC dir holding:
 #   argv      : one docker-run arg per line
@@ -26,9 +26,9 @@ STUB
     chmod +x "$bin/docker"
     # Force docker so the recording stub (not a real runtime like Apple
     # `container`, if installed on the host) captures the run argv + staged dir.
-    env -i HOME="$home" PATH="$bin:$PATH" REC="$rec" \
+    env -i HOME="$home" PATH="$bin:$HOST_TOOLS" REC="$rec" \
         CLAUDE_FLAVOR=vertex CLAUDE_RUNTIME=docker \
-        bash "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
+        "$LAUNCHER" </dev/null >/dev/null 2>&1 || true
     rm -rf "$bin"
     printf '%s' "$rec"
 }
@@ -70,12 +70,14 @@ assert_not_contains "$ls" "host-claude.json"          "absent host claude.json n
 assert_not_contains "$ls" "statusline.sh"             "absent statusline not staged"
 rm -rf "$h" "$rec"
 
-# --- stage dir is cleaned up after the run (no .stage.* left behind) ---
+# --- stage dir and its env file are cleaned up after the run (no .stage.* left behind) ---
 h="$(mktemp -d)"
 mkdir -p "$h/.config/claude-container/vertex"
 rec="$(run_launch "$h")"
 leftovers="$(ls -A "$h/.local/state/claude-container/vertex/" 2>/dev/null | grep '^\.stage\.' || true)"
 assert_eq "" "$leftovers" "stage dir removed after run"
+env_leftovers="$(ls -A "$h/.local/state/claude-container/vertex/" 2>/dev/null | grep '^\.stage\..*\.env$' || true)"
+assert_eq "" "$env_leftovers" "per-run env file removed after run"
 rm -rf "$h" "$rec"
 
 # --- rw .claude.json migration: old $STATE_DIR/claude.json -> claude/claude.json ---
@@ -93,16 +95,16 @@ rm -rf "$h" "$rec"
 # perms MODE FILE: portable octal-perms fetch (GNU stat, then BSD/macOS stat).
 perms() { stat -c '%a' "$2" 2>/dev/null || stat -f '%Lp' "$2"; }
 
-# --- #8: a pre-existing env file with loose perms is re-tightened to 600 -------
+# --- #8: a pre-existing config.toml with loose perms is re-tightened to 600 ----
 # The chmod used to run only when the file was first seeded, so a file left
 # world/group-readable (bad umask, a 644 restore) kept leaking MCP tokens.
 h="$(mktemp -d)"
 cfg="$h/.config/claude-container/vertex"
 mkdir -p "$cfg"
-printf 'JIRA_API_TOKEN=secret\n' > "$cfg/env"
-chmod 644 "$cfg/env"
+printf '[env]\nJIRA_API_TOKEN = "secret"\n' > "$cfg/config.toml"
+chmod 644 "$cfg/config.toml"
 rec="$(run_launch "$h")"
-assert_eq "600" "$(perms x "$cfg/env")" "pre-existing env file re-tightened to 600"
+assert_eq "600" "$(perms x "$cfg/config.toml")" "pre-existing config.toml re-tightened to 600"
 rm -rf "$h" "$rec"
 
 # --- #7: stale .stage.* dirs orphaned by a crash are swept at boot ------------

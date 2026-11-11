@@ -24,11 +24,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - name: Install test dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq rsync
       - name: pytest (gateway Okta helper)
         run: uv run pytest -q
+      - name: Go (format, vet, test, cross-compile)
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" \
+              go build -trimpath -o /dev/null ./cmd/claude-container
+          done
       - name: bash suites
         run: tests/run.sh
 
@@ -39,6 +51,10 @@ jobs:
     permissions:
       contents: read
       packages: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # No checkout here, so gh can't infer the repo from a git remote.
+      GH_REPO: ${{ github.repository }}
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       sha7: ${{ steps.resolve.outputs.sha7 }}
@@ -57,15 +73,31 @@ jobs:
           echo "sha7=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           build=true
           if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
-            # Skip only when every flavor already carries npm's latest, so a
-            # publish that failed partway still gets retried. Missing or
-            # unreadable image -> empty label -> build.
+            # Skip only when every flavor already carries npm's latest AND that
+            # published revision has its GitHub Release, so a publish that failed
+            # partway (images or release) still gets retried. Missing or
+            # unreadable image -> empty labels -> build.
             build=false
             for flavor in personal vertex gateway; do
-              published="$(docker buildx imagetools inspect "$IMAGE_REPO:$flavor-latest" --format '{{json .Image}}' 2>/dev/null \
-                | jq -r '(if has("config") then . else .["linux/amd64"] end).config.Labels["org.opencontainers.image.version"] // empty' 2>/dev/null || true)"
+              labels="$(docker buildx imagetools inspect "$IMAGE_REPO:$flavor-latest" --format '{{json .Image}}' 2>/dev/null \
+                | jq -r '(if has("config") then . else .["linux/amd64"] end).config.Labels | [.["org.opencontainers.image.version"], .["org.opencontainers.image.revision"]] | map(. // "") | @tsv' 2>/dev/null || true)"
+              published="$(cut -f1 <<<"$labels")"
+              revision="$(cut -f2 <<<"$labels")"
               [[ "$published" == "$version" ]] || build=true
-              echo "$flavor-latest claude-code: ${published:-<none>}" >> "$GITHUB_STEP_SUMMARY"
+              if [[ -z "$revision" ]]; then
+                build=true
+              elif ! release_error="$(gh release view "v$version-${revision::7}" 2>&1)"; then
+                # Only "not found" means build; any other gh failure must not
+                # silently turn every weekly run into a rebuild.
+                if [[ "$release_error" == *"release not found"* ]]; then
+                  build=true
+                else
+                  echo "gh release view failed: $release_error" >> "$GITHUB_STEP_SUMMARY"
+                  echo "gh release view failed: $release_error" >&2
+                  exit 1
+                fi
+              fi
+              echo "$flavor-latest claude-code: ${published:-<none>} revision: ${revision:-<none>}" >> "$GITHUB_STEP_SUMMARY"
             done
             echo "npm latest: $version, build: $build" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -151,3 +183,37 @@ jobs:
             type=gha,scope=cc-gateway
             type=gha,scope=cc-personal
           cache-to: type=gha,scope=cc-gateway,mode=max
+
+  release:
+    needs: [plan, publish]
+    if: needs.plan.outputs.build == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      SHA7: ${{ needs.plan.outputs.sha7 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build binaries and create release
+        run: |
+          TAG="v${VERSION}-${SHA7}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists; skipping"
+            exit 0
+          fi
+          mkdir dist
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" \
+              go build -trimpath \
+                -ldflags "-X github.com/multigl/claude-container/internal/buildinfo.Version=v${VERSION}-${SHA7} -X github.com/multigl/claude-container/internal/buildinfo.ImageSuffix=${VERSION}-${SHA7} -X github.com/multigl/claude-container/internal/buildinfo.ImageRepo=${IMAGE_REPO}" \
+                -o "dist/claude-container_${target%/*}_${target#*/}" ./cmd/claude-container
+          done
+          (cd dist && sha256sum claude-container_* > SHA256SUMS)
+          gh release create "$TAG" --latest --title "$TAG" \
+            --notes "claude-code $VERSION, images $IMAGE_REPO:<flavor>-$VERSION-$SHA7" \
+            dist/claude-container_* dist/SHA256SUMS
