@@ -27,4 +27,22 @@ assert_eq "" "$unpinned" "third-party actions pinned to full commit SHAs"
 
 assert_contains "$wf" "for flavor in personal vertex gateway" "weekly check reads every flavor's label"
 
+assert_contains "$wf" "actions/setup-go" "test and release jobs set up Go"
+assert_contains "$wf" "go test ./..." "Go tests run in CI"
+assert_contains "$wf" "go vet ./..." "go vet runs in CI"
+assert_contains "$wf" 'test -z "$(gofmt -l .)"' "gofmt is enforced"
+
+release_job="$(sed -n '/^  release:/,$p' "$WF")"
+assert_contains "$(grep -m1 '^    needs:' <<<"$release_job")" "publish" "release waits for publish"
+assert_contains "$release_job" "contents: write" "release job can create releases"
+assert_contains "$wf" "gh release view" "release idempotency and weekly skip check"
+assert_contains "$wf" 'gh release view "v$version-' "weekly skip requires the matching release"
+for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+    assert_contains "$release_job" "$target" "release builds $target"
+done
+assert_contains "$release_job" 'GOOS="${target%/*}" GOARCH="${target#*/}"' "release sets GOOS/GOARCH per target"
+assert_contains "$release_job" 'dist/claude-container_${target%/*}_${target#*/}' "release names assets claude-container_<os>_<arch>"
+assert_contains "$release_job" "CGO_ENABLED=0" "release builds are static"
+assert_contains "$release_job" "buildinfo.Version=v\$" "release stamps the tag as Version"
+
 finish
