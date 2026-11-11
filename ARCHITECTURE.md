@@ -17,6 +17,7 @@ same ground in more depth, with the gotchas that bit us.
 | `gateway/okta_token_helper.py` | The gateway flavor's baked `apiKeyHelper` |
 | `install.sh` | The installer behind the curl one-liner: downloads the release binary |
 | `.github/workflows/ci.yml` | Tests, image publishing, binary releases, and the weekly refresh |
+| `docker-bake.hcl` | CI's image build: all three flavors in one bake, with the registry cache |
 | `tests/` | Bash suites (`tests/run.sh`), including black-box tests of the built binary, plus the Okta helper's pytest suite |
 
 ## One build, three flavors
@@ -182,17 +183,25 @@ The three differ in how host uids reach the mounts:
 
 - **test** runs `go vet`, `gofmt -l`, `go test ./...`, `uv run pytest -q` and
   `tests/run.sh` on every PR and every push to `main`. It also cross-compiles all
-  four binaries without publishing.
+  four binaries without publishing. Pushes to `main` that touch only docs (root
+  `*.md`, `docs/**`, `LICENSE`) don't run the workflow at all; the weekly run
+  still picks up a new claude-code.
 - **plan** resolves the claude-code version once with `npm view`, then decides
   whether to build. Pushes to `main` and manual dispatches always build. The
   weekly cron (`0 3 * * 1`, Sunday evening US time) skips only when every
   flavor's `-latest` image carries npm's latest version *and* a GitHub Release
   exists for that version's tag. A run that published images but failed to
   release is retried the next week.
-- **publish** builds all three flavors for `linux/amd64` and `linux/arm64` (arm64
-  under QEMU) and pushes them to `ghcr.io/multigl/claude-container`. It runs on
-  `main` only.
-- **release** needs `publish`, so it never runs if the images failed to push. It
+- **publish** builds all three flavors, one job per architecture on a native
+  runner (`ubuntu-latest` for amd64, `ubuntu-24.04-arm` for arm64). Each job runs
+  one `docker buildx bake` of `docker-bake.hcl`, which builds the flavors in
+  parallel and the shared `base` stage once, and pushes the images untagged, by
+  digest. Layers are cached in the registry under `cache-<arch>-<flavor>` tags.
+  It runs on `main` only.
+- **merge** tags each flavor's two digests together as one multi-arch image in
+  `ghcr.io/multigl/claude-container`, so `-latest` only moves once both
+  architectures are pushed.
+- **release** needs `merge`, so it never runs if the images failed to push. It
   cross-compiles the four binaries with `CGO_ENABLED=0`, stamping the version and
   image suffix with `-ldflags -X`, then creates a GitHub Release with the
   binaries and a `SHA256SUMS` file, marked latest. It skips with a note if the
@@ -202,8 +211,8 @@ Every image publish is a release. The release tag is `v<claude-version>-<sha7>`.
 Each flavor's image gets two tags: `<flavor>-latest` and
 `<flavor>-<claude-version>-<sha7>`. CI passes the resolved version as the
 `CLAUDE_CODE_VERSION` build arg, so the tag, the label, and the installed claude
-agree. The revision label comes from build-push-action's `labels:` input, not a
-`Containerfile` ARG, because a per-commit ARG would invalidate the cache for
+agree. The revision label comes from the `REVISION` variable in
+`docker-bake.hcl`, not a `Containerfile` ARG, because a per-commit ARG would invalidate the cache for
 every later layer. Third-party actions are pinned to commit SHAs.
 
 Plugin SHAs (`SUPERPOWERS_SHA`, `CAVEMAN_SHA`) are pinned in the `Containerfile`

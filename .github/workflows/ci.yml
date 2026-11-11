@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+    # Docs-only pushes don't rebuild images or cut a release; the weekly run
+    # still picks up a new claude-code. Root *.md only: seed dirs are baked in.
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - "LICENSE"
   schedule:
     # 03:00 UTC Monday = Sunday evening in US time zones.
     - cron: "0 3 * * 1"
@@ -107,6 +113,63 @@ jobs:
     needs: plan
     # -latest is what every install pulls, so only main may move it.
     if: needs.plan.outputs.build == 'true' && github.ref == 'refs/heads/main'
+    # Each architecture builds on a native runner (no QEMU) and pushes untagged,
+    # by digest; `merge` tags the pair as one multi-arch image.
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push all flavors
+        id: bake
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
+        env:
+          CLAUDE_CODE_VERSION: ${{ needs.plan.outputs.version }}
+          REVISION: ${{ github.sha }}
+          CACHE_PREFIX: ${{ env.IMAGE_REPO }}:cache-${{ matrix.arch }}
+        with:
+          source: .
+          files: docker-bake.hcl
+          set: |
+            *.platform=linux/${{ matrix.arch }}
+            *.output=type=image,name=${{ env.IMAGE_REPO }},push-by-digest=true,name-canonical=true,push=true
+      - name: Record digests
+        env:
+          METADATA: ${{ steps.bake.outputs.metadata }}
+        run: |
+          mkdir digests
+          for flavor in personal vertex gateway; do
+            digest="$(jq -r --arg flavor "$flavor" '.[$flavor]["containerimage.digest"] // empty' <<<"$METADATA")"
+            if [[ -z "$digest" ]]; then
+              echo "no digest for $flavor in bake metadata" >&2
+              exit 1
+            fi
+            echo "$digest" > "digests/$flavor"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: digests/
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [plan, publish]
+    if: needs.plan.outputs.build == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -115,77 +178,28 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       SHA7: ${{ needs.plan.outputs.sha7 }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digests-*
+          path: digests
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Sequential flavors in one builder so the shared `base` stage builds once;
-      # each flavor exports its own cache scope (an export covers only that build).
-      - name: personal
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          file: Containerfile
-          target: personal
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            CLAUDE_CODE_VERSION=${{ env.VERSION }}
-          # Set here, not as a Containerfile ARG: a per-commit ARG would bust the
-          # cache of every layer after it.
-          labels: org.opencontainers.image.revision=${{ github.sha }}
-          tags: |
-            ${{ env.IMAGE_REPO }}:personal-latest
-            ${{ env.IMAGE_REPO }}:personal-${{ env.VERSION }}-${{ env.SHA7 }}
-          cache-from: type=gha,scope=cc-personal
-          cache-to: type=gha,scope=cc-personal,mode=max
-      - name: vertex
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          file: Containerfile
-          target: vertex
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            CLAUDE_CODE_VERSION=${{ env.VERSION }}
-          # Set here, not as a Containerfile ARG: a per-commit ARG would bust the
-          # cache of every layer after it.
-          labels: org.opencontainers.image.revision=${{ github.sha }}
-          tags: |
-            ${{ env.IMAGE_REPO }}:vertex-latest
-            ${{ env.IMAGE_REPO }}:vertex-${{ env.VERSION }}-${{ env.SHA7 }}
-          cache-from: |
-            type=gha,scope=cc-vertex
-            type=gha,scope=cc-personal
-          cache-to: type=gha,scope=cc-vertex,mode=max
-      - name: gateway
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          file: Containerfile
-          target: gateway
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            CLAUDE_CODE_VERSION=${{ env.VERSION }}
-          # Set here, not as a Containerfile ARG: a per-commit ARG would bust the
-          # cache of every layer after it.
-          labels: org.opencontainers.image.revision=${{ github.sha }}
-          tags: |
-            ${{ env.IMAGE_REPO }}:gateway-latest
-            ${{ env.IMAGE_REPO }}:gateway-${{ env.VERSION }}-${{ env.SHA7 }}
-          cache-from: |
-            type=gha,scope=cc-gateway
-            type=gha,scope=cc-personal
-          cache-to: type=gha,scope=cc-gateway,mode=max
+      - name: Tag multi-arch images
+        run: |
+          for flavor in personal vertex gateway; do
+            docker buildx imagetools create \
+              -t "$IMAGE_REPO:$flavor-latest" \
+              -t "$IMAGE_REPO:$flavor-$VERSION-$SHA7" \
+              "$IMAGE_REPO@$(cat "digests/digests-amd64/$flavor")" \
+              "$IMAGE_REPO@$(cat "digests/digests-arm64/$flavor")"
+          done
 
   release:
-    needs: [plan, publish]
+    needs: [plan, merge]
     if: needs.plan.outputs.build == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

@@ -6,20 +6,44 @@ cd "$(dirname "$0")"
 source ./lib.sh
 WF="../.github/workflows/ci.yml"
 CF="../Containerfile"
+BAKE="../docker-bake.hcl"
 
 wf="$(cat "$WF")"
 cf="$(cat "$CF")"
+bake="$(cat "$BAKE")"
 
 # A per-commit ARG in base becomes env for every later RUN and busts their cache.
 assert_not_contains "$cf" "ARG VCS_REF" "Containerfile has no per-commit build arg"
-assert_contains "$wf" "org.opencontainers.image.revision=" "revision label set by CI, outside the cache key"
+assert_contains "$bake" '"org.opencontainers.image.revision" = REVISION' "revision label set by bake, outside the cache key"
+assert_contains "$wf" 'REVISION: ${{ github.sha }}' "CI passes the commit as REVISION"
 
+assert_contains "$bake" 'ref=${CACHE_PREFIX}-${flavor}' "cache ref is per flavor"
+assert_contains "$bake" "ignore-error=true" "a failed cache export never fails a publish"
+assert_contains "$wf" 'CACHE_PREFIX: ${{ env.IMAGE_REPO }}:cache-${{ matrix.arch }}' "cache is per architecture"
 for flavor in personal vertex gateway; do
-    assert_contains "$wf" "cache-to: type=gha,scope=cc-$flavor,mode=max" "$flavor exports its own cache scope"
+    target_block="$(sed -n "/^target \"$flavor\"/,/^}/p" "$BAKE")"
+    assert_contains "$target_block" "cache_to(\"$flavor\")" "$flavor exports its own cache"
+    assert_contains "$(grep -m1 'targets' <<<"$bake")" "\"$flavor\"" "bake default group builds $flavor"
 done
 
-publish_if="$(sed -n '/^  publish:/,/^  [a-z]/p' "$WF" | grep -m1 '^    if:')"
-assert_contains "$publish_if" "refs/heads/main" "publish (moves -latest) only runs on main"
+publish_job="$(sed -n '/^  publish:/,/^  merge:/p' "$WF")"
+assert_contains "$(grep -m1 '^    if:' <<<"$publish_job")" "refs/heads/main" "publish only runs on main"
+assert_contains "$publish_job" "runner: ubuntu-24.04-arm" "arm64 builds on a native runner, not QEMU"
+assert_not_contains "$publish_job" "setup-qemu-action" "no QEMU in publish"
+assert_contains "$publish_job" "push-by-digest=true" "per-arch images push untagged, by digest"
+assert_not_contains "$publish_job" ":personal-latest" "publish never tags -latest (merge does, after both arches)"
+
+merge_job="$(sed -n '/^  merge:/,/^  release:/p' "$WF")"
+assert_contains "$(grep -m1 '^    if:' <<<"$merge_job")" "refs/heads/main" "merge (moves -latest) only runs on main"
+assert_contains "$(grep -m1 '^    needs:' <<<"$merge_job")" "publish" "merge waits for both architectures"
+assert_contains "$merge_job" 'digests/digests-amd64/$flavor' "merge combines the amd64 digest"
+assert_contains "$merge_job" 'digests/digests-arm64/$flavor' "merge combines the arm64 digest"
+assert_contains "$merge_job" '-t "$IMAGE_REPO:$flavor-latest"' "merge tags -latest"
+assert_contains "$merge_job" '-t "$IMAGE_REPO:$flavor-$VERSION-$SHA7"' "merge tags the pinned version"
+
+# Seed dirs are baked into images, so only root-level docs may skip the build.
+push_trigger="$(sed -n '/^  push:/,/^  schedule:/p' "$WF")"
+assert_not_contains "$push_trigger" '"**.md"' "docs-only skip doesn't cover markdown baked from seed dirs"
 
 third_party="$(grep -E '^\s*-?\s*uses:' "$WF" | grep -v 'uses: actions/')"
 unpinned="$(grep -Ev 'uses: [^@]+@[0-9a-f]{40}( |$)' <<<"$third_party" || true)"
@@ -37,7 +61,7 @@ assert_contains "$plan_job" "GH_REPO: \${{ github.repository }}" "plan job sets 
 assert_contains "$plan_job" "release not found" "plan distinguishes release-not-found from other gh errors"
 
 release_job="$(sed -n '/^  release:/,$p' "$WF")"
-assert_contains "$(grep -m1 '^    needs:' <<<"$release_job")" "publish" "release waits for publish"
+assert_contains "$(grep -m1 '^    needs:' <<<"$release_job")" "merge" "release waits for the tagged images"
 assert_contains "$release_job" "contents: write" "release job can create releases"
 assert_contains "$wf" "gh release view" "release idempotency and weekly skip check"
 assert_contains "$wf" 'gh release view "v$version-' "weekly skip requires the matching release"

@@ -123,22 +123,30 @@ installs **personal** (the default flavor). `just install` / `install-all` run
 
 `.github/workflows/ci.yml` runs `go vet`, `gofmt -l`, `go test ./...`,
 `uv run pytest -q` + `tests/run.sh` on every PR and push, and cross-compiles all
-four binaries without publishing. On push to `main`, `workflow_dispatch`, and a
-weekly cron (`0 3 * * 1`, Sunday evening US time), `plan` → `publish` builds all
-three flavors for `linux/amd64` + `linux/arm64` and pushes
-`ghcr.io/multigl/claude-container` tagged `<flavor>-latest` and
-`<flavor>-<claude-version>-<sha7>`. CI resolves the claude-code version once from
+four binaries without publishing. On push to `main` (except docs-only pushes:
+root `*.md`, `docs/**`, `LICENSE` are `paths-ignore`d), `workflow_dispatch`, and a
+weekly cron (`0 3 * * 1`, Sunday evening US time), `plan` → `publish` → `merge`
+builds all three flavors and pushes `ghcr.io/multigl/claude-container` tagged
+`<flavor>-latest` and `<flavor>-<claude-version>-<sha7>`. `publish` is a matrix
+with one job per architecture on a native runner (`ubuntu-latest` for amd64,
+`ubuntu-24.04-arm` for arm64; no QEMU). Each runs one `docker buildx bake` of
+`docker-bake.hcl` (all three flavors in parallel, `base` built once) and pushes
+untagged by digest, with a registry cache at `<repo>:cache-<arch>-<flavor>`
+(`ignore-error`, so a cache failure never fails a publish). `merge` then tags each
+flavor's amd64 + arm64 digests together with `docker buildx imagetools create`, so
+`-latest` only moves once both architectures pushed. `docker-bake.hcl` is CI-only;
+local builds stay on the justfile. CI resolves the claude-code version once from
 npm and passes it as `CLAUDE_CODE_VERSION`, so tag, label, and installed claude
 agree. The weekly run skips only when every `<flavor>-latest` carries npm's latest
 version **and** a GitHub Release exists for that version's tag, so a run where
 `publish` worked but `release` failed is retried. Plugin SHAs are not bumped by CI.
 
-**Every image publish is a release.** The `release` job needs `publish` (never
+**Every image publish is a release.** The `release` job needs `merge` (never
 runs if images failed), cross-compiles the four binaries with `CGO_ENABLED=0` and
 `-ldflags -X` stamping `buildinfo.Version` and `buildinfo.ImageSuffix`, and
 creates a GitHub Release `v<claude-version>-<sha7>` marked latest with
 `claude-container_<os>_<arch>` assets and `SHA256SUMS`. It skips with a note if the
-tag exists (idempotent re-runs). Docs-only pushes release too, same as images.
+tag exists (idempotent re-runs).
 **Never prune versioned image tags**: an installed binary is pinned to
 `<flavor>-<claude-version>-<sha7>`, so that tag must stay pullable. Nothing prunes
 GHCR today; any future cleanup must keep every tag a release references.
