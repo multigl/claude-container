@@ -597,6 +597,26 @@ case "${1:-}" in
         run_in_container true
         echo ">> rebuilt memory indexes for $PROJECT_KEY (project + global tier)"
         ;;
+    update)
+        # Pull the CI-published image. Pull only: a local override in IMAGE is
+        # never rebuilt or replaced, just called out so the user isn't surprised.
+        _conf_warn_unknown_keys "$HOST_LAUNCHER_CONF"
+        if [[ "$RUNTIME" == none ]]; then
+            echo "!! no container runtime available (install docker, podman, or Apple container)" >&2
+            exit 1
+        fi
+        cr_load_driver "$RUNTIME"
+        echo ">> pulling $PUBLISHED_IMAGE via $RUNTIME"
+        if ! rt_pull "$PUBLISHED_IMAGE"; then
+            echo "!! pull failed for $PUBLISHED_IMAGE (offline, or the GHCR package is still private?)" >&2
+            exit 1
+        fi
+        _ver="$(rt_image_label "$PUBLISHED_IMAGE" org.opencontainers.image.version)"
+        [[ -n "$_ver" ]] && echo ">> claude-code $_ver"
+        if [[ "$IMAGE" != "$PUBLISHED_IMAGE" ]]; then
+            echo ">> note: image override active ($IMAGE); plain claude-$FLAVOR keeps running it, not $PUBLISHED_IMAGE" >&2
+        fi
+        ;;
     shell)
         shift
         run_in_container bash "$@"
