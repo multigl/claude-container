@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -91,9 +92,19 @@ func WriteEnvFile(path string, env map[string]string) error {
 	for _, key := range keys {
 		builder.WriteString(key + "=" + env[key] + "\n")
 	}
-	if err := os.WriteFile(path, []byte(builder.String()), 0o600); err != nil {
+	// Temp file + rename keeps the write atomic and never exposes secrets
+	// under a pre-existing file's wider permissions.
+	temporaryFile, err := os.CreateTemp(filepath.Dir(path), ".env-*")
+	if err != nil {
 		return err
 	}
-	// WriteFile's mode only applies on creation.
-	return os.Chmod(path, 0o600)
+	defer os.Remove(temporaryFile.Name())
+	if _, err := temporaryFile.WriteString(builder.String()); err != nil {
+		temporaryFile.Close()
+		return err
+	}
+	if err := temporaryFile.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryFile.Name(), path)
 }

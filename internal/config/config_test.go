@@ -152,3 +152,32 @@ func TestWriteEnvFile(t *testing.T) {
 		t.Errorf("content = %q", content)
 	}
 }
+
+func TestWriteEnvFileReplacesWiderExistingFile(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "env")
+	if err := os.WriteFile(path, []byte("OLD=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteEnvFile(path, map[string]string{"NEW": "2"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
+	}
+	content, _ := os.ReadFile(path)
+	if string(content) != "NEW=2\n" {
+		t.Errorf("content = %q", content)
+	}
+	entries, _ := os.ReadDir(directory)
+	if len(entries) != 1 {
+		t.Errorf("directory has %d entries, want 1", len(entries))
+	}
+}
