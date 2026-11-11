@@ -21,6 +21,8 @@ import (
 )
 
 type app struct {
+	argv             []string
+	environ          []string
 	getenv           func(string) string
 	stdout           io.Writer
 	stderr           io.Writer
@@ -65,7 +67,7 @@ func flavorFromName(argv0, override string) string {
 
 func run(argv []string, environ []string, stdout, stderr io.Writer) int {
 	getenv := getenvFrom(environ)
-	a := &app{getenv: getenv, stdout: stdout, stderr: stderr}
+	a := &app{argv: argv, environ: environ, getenv: getenv, stdout: stdout, stderr: stderr}
 
 	flavorName := flavorFromName(argv[0], getenv("CLAUDE_FLAVOR"))
 	known := false

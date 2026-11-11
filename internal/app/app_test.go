@@ -2,10 +2,19 @@ package app
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/multigl/claude-container/internal/buildinfo"
 )
 
 // fakeRuntimeScript answers `info` (so detection sees docker as functional)
@@ -371,6 +380,218 @@ func TestRun(t *testing.T) {
 				extraEnvironment = testCase.environment(h)
 			}
 			testCase.check(t, h, h.invoke(testCase.argv0, testCase.arguments, extraEnvironment))
+		})
+	}
+}
+
+type fakeRelease struct {
+	server    *httptest.Server
+	downloads int
+}
+
+// newFakeRelease answers the latest-release query with tag, or with a 500
+// when failing, and counts asset downloads.
+func newFakeRelease(t *testing.T, tag string, failing bool, assetBytes []byte) *fakeRelease {
+	t.Helper()
+	release := &fakeRelease{}
+	assetName := "claude-container_" + goruntime.GOOS + "_" + goruntime.GOARCH
+	sum := sha256.Sum256(assetBytes)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/multigl/claude-container/releases/latest", func(writer http.ResponseWriter, request *http.Request) {
+		if failing {
+			http.Error(writer, "boom", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(writer, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q},{"name":"SHA256SUMS","browser_download_url":%q}]}`,
+			tag, assetName, release.server.URL+"/download/"+assetName, release.server.URL+"/download/SHA256SUMS")
+	})
+	mux.HandleFunc("/download/"+assetName, func(writer http.ResponseWriter, request *http.Request) {
+		release.downloads++
+		writer.Write(assetBytes)
+	})
+	mux.HandleFunc("/download/SHA256SUMS", func(writer http.ResponseWriter, request *http.Request) {
+		fmt.Fprintf(writer, "%s  %s\n", hex.EncodeToString(sum[:]), assetName)
+	})
+	release.server = httptest.NewServer(mux)
+	t.Cleanup(release.server.Close)
+	return release
+}
+
+type execCall struct {
+	binary  string
+	argv    []string
+	environ []string
+}
+
+func TestUpdateFlow(t *testing.T) {
+	const pinnedVertex = "ghcr.io/multigl/claude-container:vertex-latest"
+	tests := []struct {
+		name          string
+		version       string
+		tag           string
+		failing       bool
+		readOnly      bool
+		environment   map[string]string
+		wantCode      int
+		wantDownloads int
+		wantExec      bool
+		wantPull      bool
+		wantStdout    string
+		wantStderr    string
+		wantBinary    string
+	}{
+		{
+			name:       "same tag: no download, then a pull",
+			version:    "v1.0.0",
+			tag:        "v1.0.0",
+			wantPull:   true,
+			wantBinary: "old binary",
+		},
+		{
+			name:       "release check fails: exit 1 and no pull",
+			version:    "v1.0.0",
+			failing:    true,
+			wantCode:   1,
+			wantStderr: "500",
+			wantBinary: "old binary",
+		},
+		{
+			name:       "dev build skips self-update",
+			version:    "dev",
+			tag:        "v2.0.0",
+			wantPull:   true,
+			wantStdout: "dev build",
+			wantBinary: "old binary",
+		},
+		{
+			name:        "already self-updated: no download, then a pull",
+			version:     "v1.0.0",
+			tag:         "v2.0.0",
+			environment: map[string]string{"_CLAUDE_SELFUPDATED": "1"},
+			wantPull:    true,
+			wantBinary:  "old binary",
+		},
+		{
+			name:          "differing tag: replaces the binary and re-execs",
+			version:       "v1.0.0",
+			tag:           "v2.0.0",
+			wantDownloads: 1,
+			wantExec:      true,
+			wantBinary:    "new binary",
+		},
+		{
+			name:       "install directory not writable: prints install.sh and pulls",
+			version:    "v1.0.0",
+			tag:        "v2.0.0",
+			readOnly:   true,
+			wantPull:   true,
+			wantStderr: "curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash",
+			wantBinary: "old binary",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.readOnly && os.Geteuid() == 0 {
+				t.Skip("root ignores directory permissions")
+			}
+			h := newHarness(t)
+			release := newFakeRelease(t, test.tag, test.failing, []byte("new binary"))
+
+			installDirectory := t.TempDir()
+			realBinary := filepath.Join(installDirectory, "claude-container")
+			if err := os.WriteFile(realBinary, []byte("old binary"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			symlink := filepath.Join(t.TempDir(), "claude-vertex")
+			if err := os.Symlink(realBinary, symlink); err != nil {
+				t.Fatal(err)
+			}
+			if test.readOnly {
+				if err := os.Chmod(installDirectory, 0o555); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(installDirectory, 0o755) })
+			}
+
+			var calls []execCall
+			originalVersion, originalAPIBase, originalExecutable, originalExec := buildinfo.Version, apiBase, executablePath, execBinary
+			t.Cleanup(func() {
+				buildinfo.Version, apiBase, executablePath, execBinary = originalVersion, originalAPIBase, originalExecutable, originalExec
+			})
+			buildinfo.Version = test.version
+			apiBase = release.server.URL
+			executablePath = func() (string, error) { return symlink, nil }
+			execBinary = func(binary string, argv []string, environ []string) error {
+				calls = append(calls, execCall{binary, argv, environ})
+				return nil
+			}
+
+			got := h.invoke("claude-vertex", []string{"update"}, test.environment)
+
+			if got.code != test.wantCode {
+				t.Errorf("exit %d, want %d; stderr: %s", got.code, test.wantCode, got.stderr)
+			}
+			if release.downloads != test.wantDownloads {
+				t.Errorf("%d downloads, want %d", release.downloads, test.wantDownloads)
+			}
+			if (len(calls) > 0) != test.wantExec {
+				t.Errorf("exec calls %v, want exec %v", calls, test.wantExec)
+			}
+			if test.wantExec && len(calls) > 0 {
+				realBinary, _ := filepath.EvalSymlinks(realBinary)
+				wantArgv := []string{"claude-vertex", "update"}
+				if calls[0].binary != realBinary || !slices.Equal(calls[0].argv, wantArgv) {
+					t.Errorf("exec %s %v, want %s %v", calls[0].binary, calls[0].argv, realBinary, wantArgv)
+				}
+			}
+			if pulled := h.runtimeGot(t, "pull "+pinnedVertex); pulled != test.wantPull {
+				t.Errorf("pulled %v, want %v: %v", pulled, test.wantPull, h.runtimeCalls(t))
+			}
+			if test.wantStdout != "" {
+				assertContains(t, "stdout", got.stdout, test.wantStdout)
+			}
+			if test.wantStderr != "" {
+				assertContains(t, "stderr", got.stderr, test.wantStderr)
+			}
+			if content := readFile(t, realBinary); content != test.wantBinary {
+				t.Errorf("binary holds %q, want %q", content, test.wantBinary)
+			}
+		})
+	}
+}
+
+func TestReexecArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		environ []string
+	}{
+		{"marker absent", []string{"HOME=/home/me", "PATH=/bin"}},
+		{"marker already present", []string{"HOME=/home/me", "_CLAUDE_SELFUPDATED=0", "PATH=/bin"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			binary, argv, environ := reexecArgs("/opt/claude-container", []string{"claude-vertex", "update"}, test.environ)
+			if binary != "/opt/claude-container" {
+				t.Errorf("binary %q", binary)
+			}
+			if !slices.Equal(argv, []string{"claude-vertex", "update"}) {
+				t.Errorf("argv %v", argv)
+			}
+			markers := 0
+			for _, entry := range environ {
+				if strings.HasPrefix(entry, "_CLAUDE_SELFUPDATED=") {
+					markers++
+					if entry != "_CLAUDE_SELFUPDATED=1" {
+						t.Errorf("marker %q", entry)
+					}
+				}
+			}
+			if markers != 1 {
+				t.Errorf("%d markers in %v, want 1", markers, environ)
+			}
+			if !slices.Contains(environ, "HOME=/home/me") || !slices.Contains(environ, "PATH=/bin") {
+				t.Errorf("environment lost entries: %v", environ)
+			}
 		})
 	}
 }

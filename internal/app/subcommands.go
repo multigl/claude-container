@@ -1,13 +1,34 @@
 package app
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/multigl/claude-container/internal/buildinfo"
 	"github.com/multigl/claude-container/internal/config"
+	"github.com/multigl/claude-container/internal/selfupdate"
+)
+
+const (
+	releaseRepo       = "multigl/claude-container"
+	selfUpdatedMarker = "_CLAUDE_SELFUPDATED"
+	installCommand    = "curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash"
+)
+
+// Replaced by tests so they never reach GitHub, rewrite the test binary or
+// exec over the test process.
+var (
+	apiBase        = selfupdate.DefaultAPIBase
+	executablePath = os.Executable
+	execBinary     = syscall.Exec
 )
 
 func directoryHasEntries(path string) bool {
@@ -102,12 +123,72 @@ func (a *app) migrateCreds() int {
 
 // update runs its steps in order and stops at the first failure.
 func (a *app) update() int {
+	if code, reexecuted := a.selfUpdate(); code != 0 || reexecuted {
+		return code
+	}
 	for _, step := range []func() int{a.migrateLegacyConfig, a.pullPinnedImage} {
 		if code := step(); code != 0 {
 			return code
 		}
 	}
 	return 0
+}
+
+// reexecArgs keeps argv[0] so the claude-<flavor> name, and with it the
+// flavor, survives the re-exec. The marker stops the new binary updating again.
+func reexecArgs(binary string, argv, environ []string) (string, []string, []string) {
+	var environment []string
+	for _, entry := range environ {
+		if !strings.HasPrefix(entry, selfUpdatedMarker+"=") {
+			environment = append(environment, entry)
+		}
+	}
+	return binary, argv, append(environment, selfUpdatedMarker+"=1")
+}
+
+// selfUpdate replaces the binary with the latest release and re-execs it.
+// A failure stops update before the pull, so it never looks half-done.
+// reexecuted only comes back true when exec is stubbed out.
+func (a *app) selfUpdate() (code int, reexecuted bool) {
+	if buildinfo.Version == "dev" {
+		fmt.Fprintln(a.stdout, ">> dev build: skipping self-update")
+		return 0, false
+	}
+	if a.getenv(selfUpdatedMarker) == "1" {
+		return 0, false
+	}
+	client := &http.Client{Timeout: 60 * time.Second}
+	release, err := selfupdate.Latest(client, apiBase, releaseRepo, goruntime.GOOS, goruntime.GOARCH, a.getenv("GH_TOKEN"))
+	if err != nil {
+		fmt.Fprintf(a.stderr, "!! self-update: %v\n", err)
+		return 1, false
+	}
+	if release.Tag == buildinfo.Version {
+		return 0, false
+	}
+	executable, err := executablePath()
+	if err == nil {
+		executable, err = filepath.EvalSymlinks(executable)
+	}
+	if err != nil {
+		fmt.Fprintf(a.stderr, "!! self-update: locating this binary: %v\n", err)
+		return 1, false
+	}
+	fmt.Fprintf(a.stdout, ">> updating claude-container %s -> %s\n", buildinfo.Version, release.Tag)
+	err = selfupdate.Apply(client, release, executable)
+	if errors.Is(err, selfupdate.ErrNotWritable) {
+		fmt.Fprintf(a.stderr, ">> can't replace %s (%v); to update the launcher, run:\n   %s\n", executable, err, installCommand)
+		return 0, false
+	}
+	if err != nil {
+		fmt.Fprintf(a.stderr, "!! self-update: %v\n", err)
+		return 1, false
+	}
+	if err := execBinary(reexecArgs(executable, a.argv, a.environ)); err != nil {
+		fmt.Fprintf(a.stderr, "!! re-running %s: %v\n", executable, err)
+		return 1, false
+	}
+	return 0, true
 }
 
 // migrateLegacyConfig writes config.toml from the legacy files, only when
