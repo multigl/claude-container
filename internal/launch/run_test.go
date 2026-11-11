@@ -44,11 +44,10 @@ func TestBuildArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
 	stage := Stage{Dir: filepath.Join(p.StateDir, ".stage.abc123"), EnvFile: filepath.Join(p.StateDir, ".stage.abc123.env")}
 	options := RunOptions{
 		Paths:            p,
-		Config:           config.Config{ForwardSSH: true, DNS: []string{"1.1.1.1"}, Mounts: []config.Mount{{Path: notes}}},
+		Config:           config.Config{ForwardSSH: true, DNS: []string{"1.1.1.1"}, Mounts: []config.Mount{{Path: "~/notes"}}},
 		Runtime:          dockerRuntime,
 		Flavor:           personalFlavor,
 		Stage:            stage,
@@ -59,9 +58,9 @@ func TestBuildArgs(t *testing.T) {
 		GID:              20,
 		TTY:              true,
 		Reseed:           true,
-		GHToken:          "gho_secret",
 		Command:          []string{"claude", "--resume"},
 		WorkingDirectory: "/work/repo",
+		Home:             home,
 	}
 
 	args, warnings := BuildArgs(options)
@@ -70,7 +69,6 @@ func TestBuildArgs(t *testing.T) {
 		"docker", "run", "--rm",
 		"-it",
 		"-v", stage.Dir + ":/opt/claude-stage:ro",
-		"-e", "GH_TOKEN=gho_secret",
 		"-e", "CLAUDE_RESEED=1",
 		"-v", notes + ":/mnt/approved/notes:ro",
 		"-v", "/tmp/agent.sock:/ssh-agent", "-e", "SSH_AUTH_SOCK=/ssh-agent",
@@ -91,6 +89,9 @@ func TestBuildArgs(t *testing.T) {
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if strings.Contains(strings.Join(args, " "), "GH_TOKEN") {
+		t.Fatalf("GH_TOKEN must stay off the argv: %q", args)
 	}
 }
 
@@ -172,7 +173,7 @@ func TestNewStage(t *testing.T) {
 			setModificationTime(t, oldDir, 48*time.Hour)
 			setModificationTime(t, oldEnvFile, 48*time.Hour)
 
-			stage, _, err := NewStage(p, config.Config{Env: map[string]string{"FOO": "bar"}}, home, workingDirectory)
+			stage, _, err := NewStage(p, config.Config{Env: map[string]string{"FOO": "bar"}}, nil, home, workingDirectory)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -235,7 +236,7 @@ func TestNewStageCopiesHostFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stage, _, err := NewStage(p, config.Config{}, home, t.TempDir())
+	stage, _, err := NewStage(p, config.Config{}, nil, home, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,6 +246,43 @@ func TestNewStageCopiesHostFiles(t *testing.T) {
 		if err != nil || string(content) != source {
 			t.Fatalf("%s: got %q, %v", stagedName, content, err)
 		}
+	}
+}
+
+func TestNewStageEnvironment(t *testing.T) {
+	testCases := []struct {
+		name             string
+		configured       map[string]string
+		extraEnvironment map[string]string
+		wantContent      string
+	}{
+		{"token written to env file", map[string]string{"FOO": "bar"}, map[string]string{"GH_TOKEN": "gho_secret"}, "FOO=bar\nGH_TOKEN=gho_secret\n"},
+		{"extra wins over configured", map[string]string{"GH_TOKEN": "from_config"}, map[string]string{"GH_TOKEN": "gho_secret"}, "GH_TOKEN=gho_secret\n"},
+		{"no extra keeps configured", map[string]string{"FOO": "bar"}, nil, "FOO=bar\n"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			p := newTestPaths(t)
+			stage, _, err := NewStage(p, config.Config{Env: testCase.configured}, testCase.extraEnvironment, t.TempDir(), t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stage.Remove()
+			info, err := os.Stat(stage.EnvFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode := info.Mode().Perm(); mode != 0o600 {
+				t.Fatalf("env file mode %o, want 600", mode)
+			}
+			content, err := os.ReadFile(stage.EnvFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(content) != testCase.wantContent {
+				t.Fatalf("got %q, want %q", content, testCase.wantContent)
+			}
+		})
 	}
 }
 

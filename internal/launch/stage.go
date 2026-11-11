@@ -57,7 +57,10 @@ func copyIfPresent(source, destination string) error {
 	return os.WriteFile(destination, content, 0o600)
 }
 
-func NewStage(p paths.Paths, cfg config.Config, home, workingDirectory string) (Stage, []string, error) {
+// NewStage snapshots host files into a fresh stage dir and writes the env
+// file. extraEnvironment wins over cfg.Env; it carries per-run secrets such as
+// GH_TOKEN, which must not appear on the runtime's argv where ps can read them.
+func NewStage(p paths.Paths, cfg config.Config, extraEnvironment map[string]string, home, workingDirectory string) (Stage, []string, error) {
 	sweepStaleStages(p.StateDir)
 	directory, err := os.MkdirTemp(p.StateDir, stagePrefix)
 	if err != nil {
@@ -83,7 +86,14 @@ func NewStage(p paths.Paths, cfg config.Config, home, workingDirectory string) (
 		stage.Remove()
 		return Stage{}, nil, err
 	}
-	if err := config.WriteEnvFile(stage.EnvFile, cfg.Env); err != nil {
+	environment := map[string]string{}
+	for key, value := range cfg.Env {
+		environment[key] = value
+	}
+	for key, value := range extraEnvironment {
+		environment[key] = value
+	}
+	if err := config.WriteEnvFile(stage.EnvFile, environment); err != nil {
 		stage.Remove()
 		return Stage{}, nil, err
 	}

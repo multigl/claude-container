@@ -28,8 +28,9 @@ type RunOptions struct {
 	// TTY is true only when both stdin and stdout are terminals.
 	TTY     bool
 	Reseed  bool
-	GHToken string
 	Command []string
+	// Home expands a leading ~ in configured mounts.
+	Home string
 	// WorkingDirectory is the host dir mounted at /workspace.
 	WorkingDirectory string
 }
@@ -56,15 +57,11 @@ func BuildArgs(o RunOptions) (args []string, warnings []string) {
 		args = append(args, "-it")
 	}
 	args = append(args, "-v", o.Stage.Dir+":/opt/claude-stage:ro")
-	if o.GHToken != "" {
-		args = append(args, "-e", "GH_TOKEN="+o.GHToken)
-	}
 	args = append(args, o.Flavor.RunFlags()...)
 	if o.Reseed {
 		args = append(args, "-e", "CLAUDE_RESEED=1")
 	}
-	home, _ := os.UserHomeDir()
-	mountFlags, mountWarnings := MountFlags(o.Config.Mounts, home)
+	mountFlags, mountWarnings := MountFlags(o.Config.Mounts, o.Home)
 	args = append(args, mountFlags...)
 	warnings = append(warnings, mountWarnings...)
 	args = append(args, o.Runtime.RunFlags()...)
