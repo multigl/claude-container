@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,68 +31,103 @@ func newTestPaths(t *testing.T) paths.Paths {
 }
 
 func TestBuildArgs(t *testing.T) {
-	p := newTestPaths(t)
-	home := t.TempDir()
-	notes := filepath.Join(home, "notes")
-	if err := os.MkdirAll(notes, 0o755); err != nil {
-		t.Fatal(err)
+	const secretToken = "gho_secret_value"
+	testCases := []struct {
+		name          string
+		gitHubToken   string
+		wantTokenFlag []string
+	}{
+		{"token passed by name only", secretToken, []string{"-e", "GH_TOKEN"}},
+		{"no token, no flag", "", nil},
 	}
-	dockerRuntime, err := runtime.New("docker")
-	if err != nil {
-		t.Fatal(err)
-	}
-	personalFlavor, err := flavor.New("personal", p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage := Stage{Dir: filepath.Join(p.StateDir, ".stage.abc123"), EnvFile: filepath.Join(p.StateDir, ".stage.abc123.env")}
-	options := RunOptions{
-		Paths:            p,
-		Config:           config.Config{ForwardSSH: true, DNS: []string{"1.1.1.1"}, Mounts: []config.Mount{{Path: "~/notes"}}},
-		Runtime:          dockerRuntime,
-		Flavor:           personalFlavor,
-		Stage:            stage,
-		Image:            "ghcr.io/multigl/claude-container:personal-latest",
-		Getenv:           getenvFrom(map[string]string{"SSH_AUTH_SOCK": "/tmp/agent.sock"}),
-		Host:             runtime.Host{OS: "Linux", Arch: "x86_64"},
-		UID:              501,
-		GID:              20,
-		TTY:              true,
-		Reseed:           true,
-		Command:          []string{"claude", "--resume"},
-		WorkingDirectory: "/work/repo",
-		Home:             home,
-	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			p := newTestPaths(t)
+			home := t.TempDir()
+			notes := filepath.Join(home, "notes")
+			if err := os.MkdirAll(notes, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			dockerRuntime, err := runtime.New("docker")
+			if err != nil {
+				t.Fatal(err)
+			}
+			personalFlavor, err := flavor.New("personal", p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stage := Stage{Dir: filepath.Join(p.StateDir, ".stage.abc123"), EnvFile: filepath.Join(p.StateDir, ".stage.abc123.env")}
+			options := RunOptions{
+				Paths:            p,
+				Config:           config.Config{ForwardSSH: true, DNS: []string{"1.1.1.1"}, Mounts: []config.Mount{{Path: "~/notes"}}},
+				Runtime:          dockerRuntime,
+				Flavor:           personalFlavor,
+				Stage:            stage,
+				Image:            "ghcr.io/multigl/claude-container:personal-latest",
+				Getenv:           getenvFrom(map[string]string{"SSH_AUTH_SOCK": "/tmp/agent.sock"}),
+				Host:             runtime.Host{OS: "Linux", Arch: "x86_64"},
+				UID:              501,
+				GID:              20,
+				TTY:              true,
+				Reseed:           true,
+				Command:          []string{"claude", "--resume"},
+				WorkingDirectory: "/work/repo",
+				Home:             home,
+				GitHubToken:      testCase.gitHubToken,
+			}
 
-	args, warnings := BuildArgs(options)
+			args, warnings := BuildArgs(options)
 
-	want := []string{
-		"docker", "run", "--rm",
-		"-it",
-		"-v", stage.Dir + ":/opt/claude-stage:ro",
-		"-e", "CLAUDE_RESEED=1",
-		"-v", notes + ":/mnt/approved/notes:ro",
-		"-v", "/tmp/agent.sock:/ssh-agent", "-e", "SSH_AUTH_SOCK=/ssh-agent",
-		"--dns", "1.1.1.1",
-		"--env-file", stage.EnvFile,
-		"-e", "HOST_UID=501",
-		"-e", "HOST_GID=20",
-		"-e", "CLAUDE_HOST_DIR=/work/repo",
-		"-v", "/work/repo:/workspace",
-		"-v", p.StateClaudeDir + ":/home/claude/.claude",
-		"-v", p.HostProjectDir + ":/home/claude/.claude/projects/-workspace",
-		"-w", "/workspace",
-		"ghcr.io/multigl/claude-container:personal-latest",
-		"claude", "--resume",
+			want := []string{
+				"docker", "run", "--rm",
+				"-it",
+				"-v", stage.Dir + ":/opt/claude-stage:ro",
+			}
+			want = append(want, testCase.wantTokenFlag...)
+			want = append(want,
+				"-e", "CLAUDE_RESEED=1",
+				"-v", notes+":/mnt/approved/notes:ro",
+				"-v", "/tmp/agent.sock:/ssh-agent", "-e", "SSH_AUTH_SOCK=/ssh-agent",
+				"--dns", "1.1.1.1",
+				"--env-file", stage.EnvFile,
+				"-e", "HOST_UID=501",
+				"-e", "HOST_GID=20",
+				"-e", "CLAUDE_HOST_DIR=/work/repo",
+				"-v", "/work/repo:/workspace",
+				"-v", p.StateClaudeDir+":/home/claude/.claude",
+				"-v", p.HostProjectDir+":/home/claude/.claude/projects/-workspace",
+				"-w", "/workspace",
+				"ghcr.io/multigl/claude-container:personal-latest",
+				"claude", "--resume",
+			)
+			if !reflect.DeepEqual(args, want) {
+				t.Fatalf("argv mismatch\n got: %q\nwant: %q", args, want)
+			}
+			if len(warnings) != 0 {
+				t.Fatalf("unexpected warnings: %v", warnings)
+			}
+			if strings.Contains(strings.Join(args, " "), secretToken) {
+				t.Fatalf("token value leaked onto the argv: %q", args)
+			}
+		})
 	}
-	if !reflect.DeepEqual(args, want) {
-		t.Fatalf("argv mismatch\n got: %q\nwant: %q", args, want)
+}
+
+func TestRunOptionsEnvironment(t *testing.T) {
+	testCases := []struct {
+		name        string
+		gitHubToken string
+		want        []string
+	}{
+		{"token set", "gho_secret", []string{"GH_TOKEN=gho_secret"}},
+		{"token unset", "", nil},
 	}
-	if len(warnings) != 0 {
-		t.Fatalf("unexpected warnings: %v", warnings)
-	}
-	if strings.Contains(strings.Join(args, " "), "GH_TOKEN") {
-		t.Fatalf("GH_TOKEN must stay off the argv: %q", args)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := (RunOptions{GitHubToken: testCase.gitHubToken}).Environment(); !reflect.DeepEqual(got, testCase.want) {
+				t.Fatalf("got %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
 
@@ -173,7 +209,7 @@ func TestNewStage(t *testing.T) {
 			setModificationTime(t, oldDir, 48*time.Hour)
 			setModificationTime(t, oldEnvFile, 48*time.Hour)
 
-			stage, _, err := NewStage(p, config.Config{Env: map[string]string{"FOO": "bar"}}, nil, home, workingDirectory)
+			stage, _, err := NewStage(p, config.Config{Env: map[string]string{"FOO": "bar"}}, home, workingDirectory)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -236,7 +272,7 @@ func TestNewStageCopiesHostFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stage, _, err := NewStage(p, config.Config{}, nil, home, t.TempDir())
+	stage, _, err := NewStage(p, config.Config{}, home, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,19 +287,17 @@ func TestNewStageCopiesHostFiles(t *testing.T) {
 
 func TestNewStageEnvironment(t *testing.T) {
 	testCases := []struct {
-		name             string
-		configured       map[string]string
-		extraEnvironment map[string]string
-		wantContent      string
+		name        string
+		configured  map[string]string
+		wantContent string
 	}{
-		{"token written to env file", map[string]string{"FOO": "bar"}, map[string]string{"GH_TOKEN": "gho_secret"}, "FOO=bar\nGH_TOKEN=gho_secret\n"},
-		{"extra wins over configured", map[string]string{"GH_TOKEN": "from_config"}, map[string]string{"GH_TOKEN": "gho_secret"}, "GH_TOKEN=gho_secret\n"},
-		{"no extra keeps configured", map[string]string{"FOO": "bar"}, nil, "FOO=bar\n"},
+		{"configured env written", map[string]string{"FOO": "bar", "BAZ": "qux"}, "BAZ=qux\nFOO=bar\n"},
+		{"no configured env leaves it empty", nil, ""},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			p := newTestPaths(t)
-			stage, _, err := NewStage(p, config.Config{Env: testCase.configured}, testCase.extraEnvironment, t.TempDir(), t.TempDir())
+			stage, _, err := NewStage(p, config.Config{Env: testCase.configured}, t.TempDir(), t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -282,8 +316,19 @@ func TestNewStageEnvironment(t *testing.T) {
 			if string(content) != testCase.wantContent {
 				t.Fatalf("got %q, want %q", content, testCase.wantContent)
 			}
+			if strings.Contains(string(content), "GH_TOKEN") {
+				t.Fatalf("GH_TOKEN must never reach the env file: %q", content)
+			}
 		})
 	}
+}
+
+// runWithSignals runs args the way the launcher does, signals registered first.
+func runWithSignals(t *testing.T, args []string, extraEnvironment []string) int {
+	t.Helper()
+	signals, stop := NotifySignals()
+	defer stop()
+	return Run(args, extraEnvironment, signals)
 }
 
 func TestRunExitCode(t *testing.T) {
@@ -299,34 +344,98 @@ func TestRunExitCode(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if code := Run(testCase.args); code != testCase.wantCode {
+			if code := runWithSignals(t, testCase.args, nil); code != testCase.wantCode {
 				t.Fatalf("got %d, want %d", code, testCase.wantCode)
 			}
 		})
 	}
 }
 
-func TestRunSignal(t *testing.T) {
-	directory := t.TempDir()
-	readyFile := filepath.Join(directory, "ready")
-	script := filepath.Join(directory, "fake-runtime")
-	scriptBody := "#!/bin/sh\ntrap 'exit 130' INT\ntouch \"$1\"\nwhile :; do sleep 0.05; done\n"
-	if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
-		t.Fatal(err)
+func TestRunEnvironment(t *testing.T) {
+	testCases := []struct {
+		name             string
+		extraEnvironment []string
+		wantToken        string
+	}{
+		{"token reaches the child", []string{"GH_TOKEN=gho_secret"}, "gho_secret"},
+		{"no extra environment", nil, ""},
 	}
-
-	go func() {
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
-			if _, err := os.Stat(readyFile); err == nil {
-				syscall.Kill(os.Getpid(), syscall.SIGINT)
-				return
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("GH_TOKEN", "")
+			directory := t.TempDir()
+			outputFile := filepath.Join(directory, "token")
+			script := filepath.Join(directory, "fake-runtime")
+			if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' \"$GH_TOKEN\" > \"$1\"\n"), 0o755); err != nil {
+				t.Fatal(err)
 			}
-			time.Sleep(20 * time.Millisecond)
-		}
-	}()
+			if code := runWithSignals(t, []string{script, outputFile}, testCase.extraEnvironment); code != 0 {
+				t.Fatalf("exit %d", code)
+			}
+			content, err := os.ReadFile(outputFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(content) != testCase.wantToken {
+				t.Fatalf("child saw GH_TOKEN=%q, want %q", content, testCase.wantToken)
+			}
+		})
+	}
+}
 
-	if code := Run([]string{script, readyFile}); code != 130 {
-		t.Fatalf("got %d, want 130", code)
+func TestRunSignal(t *testing.T) {
+	testCases := []struct {
+		name     string
+		signal   syscall.Signal
+		trapName string
+		wantCode int
+	}{
+		{"SIGINT relayed", syscall.SIGINT, "INT", 130},
+		{"SIGTERM relayed", syscall.SIGTERM, "TERM", 143},
+		{"SIGHUP relayed", syscall.SIGHUP, "HUP", 129},
+		{"SIGQUIT relayed", syscall.SIGQUIT, "QUIT", 131},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			directory := t.TempDir()
+			readyFile := filepath.Join(directory, "ready")
+			receivedFile := filepath.Join(directory, "received")
+			script := filepath.Join(directory, "fake-runtime")
+			scriptBody := fmt.Sprintf("#!/bin/sh\ntrap 'touch \"$2\"; exit %d' %s\ntouch \"$1\"\nwhile :; do sleep 0.05; done\n", testCase.wantCode, testCase.trapName)
+			if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// Stands in for the caller's deferred stage removal.
+			stage := filepath.Join(directory, ".stage.run")
+			if err := os.Mkdir(stage, 0o700); err != nil {
+				t.Fatal(err)
+			}
+
+			go func() {
+				deadline := time.Now().Add(10 * time.Second)
+				for time.Now().Before(deadline) {
+					if _, err := os.Stat(readyFile); err == nil {
+						syscall.Kill(os.Getpid(), testCase.signal)
+						return
+					}
+					time.Sleep(20 * time.Millisecond)
+				}
+			}()
+
+			code := func() int {
+				defer os.RemoveAll(stage)
+				return runWithSignals(t, []string{script, readyFile, receivedFile}, nil)
+			}()
+
+			if code != testCase.wantCode {
+				t.Fatalf("got %d, want %d", code, testCase.wantCode)
+			}
+			if _, err := os.Stat(receivedFile); err != nil {
+				t.Fatalf("child never got %s: %v", testCase.trapName, err)
+			}
+			if _, err := os.Stat(stage); !os.IsNotExist(err) {
+				t.Fatalf("cleanup did not run: %v", err)
+			}
+		})
 	}
 }

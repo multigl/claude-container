@@ -39,7 +39,9 @@ drivers + detection), `internal/flavor` (vertex/gateway/personal drivers),
 Host shape comes from `uname -s/-m` and `sw_vers` at runtime, never Go's `GOOS`,
 so the test fakes can exercise macOS paths on Linux. The container runs through
 `os/exec` (not `syscall.Exec`) so the stage dir and env file get cleaned up;
-SIGINT/SIGTERM are forwarded and the child's exit code is returned; `-it` only
+SIGINT/SIGTERM/SIGHUP/SIGQUIT are caught from before stage assembly (an early one
+aborts the launch and still removes the stage) and forwarded once the runtime
+starts, and the child's exit code is returned; `-it` only
 when stdin and stdout are both terminals. The working directory is `$PWD` when
 set and valid, else `os.Getwd()` (`$PWD` is unset under `env -i`).
 
@@ -256,7 +258,7 @@ is line-based, so otherwise one TOML string could inject extra variables.
 `settings.override.json` stays separate: it is Claude Code settings JSON merged in
 the container, and TOML would buy nothing.
 
-The launcher writes `[env]` (plus `GH_TOKEN`) to a per-run `0600` env file
+The launcher writes `[env]` to a per-run `0600` env file
 `$STATE_DIR/.stage.XXXXXX.env` — **outside** the mounted stage dir — and passes it
 with `--env-file`; it deliberately avoids `-e KEY=VALUE`, which would expose
 secrets in the process list. It is removed after the run, and the older-than-a-day
@@ -400,9 +402,11 @@ inside the `$STATE_CLAUDE_DIR` mount), so both the doctor check and
   of an unreadable file makes git abort with `bad config line N`, breaking every
   git call and the git-based statusline.
 - **`gh` auth is a resolved token, not a mount.** The launcher resolves
-  `gh auth token` on the host each launch (keyring-safe) and writes `GH_TOKEN` into
-  the per-run 0600 env file (see "Single config file"), **not** `-e GH_TOKEN=...`,
-  which exposed it in the process list. The file is removed after the run. The
+  `gh auth token` on the host each launch (keyring-safe) and passes a bare
+  `-e GH_TOKEN` (right after the stage mount), with the value set only in the
+  runtime's process environment; docker, podman and Apple `container` all fill a
+  bare `-e KEY` from the caller's env. So the token is on neither argv (`-e
+  GH_TOKEN=...` exposed it in the process list) nor disk (the env file). The
   entrypoint runs `gh auth setup-git` for HTTPS push.
 - **SSH agent forwarding + SSH commit signing (opt-in).** Enable per run with
   `CLAUDE_FORWARD_SSH=1`, or persist `forward_ssh = true` in

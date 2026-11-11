@@ -12,6 +12,7 @@ import (
 	goruntime "runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/multigl/claude-container/internal/buildinfo"
@@ -29,6 +30,7 @@ if [ "$1" = "-m" ]; then echo x86_64; else echo Linux; fi
 `
 
 type harness struct {
+	fakeBin     string
 	home        string
 	workspace   string
 	runtimeLog  string
@@ -62,10 +64,18 @@ func newHarness(t *testing.T) *harness {
 	t.Setenv("HOME", home)
 	t.Chdir(workspace)
 	return &harness{
+		fakeBin:     fakeBin,
 		home:        home,
 		workspace:   workspace,
 		runtimeLog:  runtimeLog,
 		environment: map[string]string{"HOME": home, "PATH": fakeBin},
+	}
+}
+
+func (h *harness) addFakeBinary(t *testing.T, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(h.fakeBin, name), []byte(content), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -591,6 +601,81 @@ func TestReexecArgs(t *testing.T) {
 			}
 			if !slices.Contains(environ, "HOME=/home/me") || !slices.Contains(environ, "PATH=/bin") {
 				t.Errorf("environment lost entries: %v", environ)
+			}
+		})
+	}
+}
+
+const fakeGitHubCLIScript = `#!/bin/sh
+[ "$1 $2" = "auth token" ] && echo gho_from_keyring
+`
+
+func TestLaunchGitHubToken(t *testing.T) {
+	tests := []struct {
+		name             string
+		installGitHubCLI bool
+		wantFlag         bool
+		wantChildToken   string
+	}{
+		{"token passed by name, value via environment", true, true, "gho_from_keyring"},
+		{"no gh, no token", false, false, ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			t.Setenv("GH_TOKEN", "")
+			if test.installGitHubCLI {
+				h.addFakeBinary(t, "gh", fakeGitHubCLIScript)
+			}
+			tokenLog := filepath.Join(t.TempDir(), "token.log")
+			h.addFakeBinary(t, "docker", fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> '%s'\nprintf '%%s' \"$GH_TOKEN\" > '%s'\n", h.runtimeLog, tokenLog))
+
+			got := h.invoke("claude-personal", nil, nil)
+
+			if got.code != 0 {
+				t.Fatalf("exit %d, stderr: %s", got.code, got.stderr)
+			}
+			var runCall string
+			for _, call := range h.runtimeCalls(t) {
+				if strings.HasPrefix(call, "run ") {
+					runCall = call
+				}
+			}
+			if hasFlag := strings.Contains(runCall, " -e GH_TOKEN "); hasFlag != test.wantFlag {
+				t.Errorf("-e GH_TOKEN present %v, want %v: %s", hasFlag, test.wantFlag, runCall)
+			}
+			if strings.Contains(runCall, "gho_from_keyring") {
+				t.Errorf("token value on argv: %s", runCall)
+			}
+			if childToken := readFile(t, tokenLog); childToken != test.wantChildToken {
+				t.Errorf("runtime saw GH_TOKEN=%q, want %q", childToken, test.wantChildToken)
+			}
+			stages, _ := filepath.Glob(filepath.Join(h.home, ".local", "state", "claude-container", "personal", ".stage.*"))
+			if len(stages) != 0 {
+				t.Errorf("stage left behind: %v", stages)
+			}
+		})
+	}
+}
+
+func TestInterruptedExitCode(t *testing.T) {
+	tests := []struct {
+		name    string
+		pending []os.Signal
+		want    int
+	}{
+		{"nothing pending", nil, 0},
+		{"SIGINT during stage assembly", []os.Signal{syscall.SIGINT}, 130},
+		{"SIGHUP during stage assembly", []os.Signal{syscall.SIGHUP}, 129},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			signals := make(chan os.Signal, 1)
+			for _, pending := range test.pending {
+				signals <- pending
+			}
+			if got := interruptedExitCode(signals); got != test.want {
+				t.Errorf("got %d, want %d", got, test.want)
 			}
 		})
 	}

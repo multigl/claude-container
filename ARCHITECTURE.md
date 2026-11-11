@@ -121,15 +121,20 @@ The launcher does this, in order:
    script, and your git identity. It mounts that one directory read-only at
    `/opt/claude-stage`. Single-file bind mounts go stale on Docker Desktop for
    macOS across sleep and wake, so the launcher never uses them.
-5. Writes the `[env]` table, plus `GH_TOKEN` from the host's `gh auth token`, to a
-   per-run `0600` env file next to the stage directory
-   (`.stage.XXXXXX.env`, outside the mounted directory) and passes it with
-   `--env-file`. Using `-e KEY=VALUE` would put secrets in the process list.
+5. Writes the `[env]` table to a per-run `0600` env file next to the stage
+   directory (`.stage.XXXXXX.env`, outside the mounted directory) and passes it
+   with `--env-file`. Using `-e KEY=VALUE` would put secrets in the process list.
+   `GH_TOKEN`, from the host's `gh auth token`, is on neither argv nor disk: the
+   argv carries a bare `-e GH_TOKEN` and the value sits in the runtime's own
+   environment, which docker, podman and Apple `container` all read a bare
+   `-e KEY` from.
 6. Runs the container with `--rm`, through `os/exec` so cleanup runs after it
    exits: `$PWD` at `/workspace`, the state `claude/` directory at `~/.claude`,
    the per-repo project directory over `~/.claude/projects/-workspace`, plus any
-   `[[mounts]]` entries. SIGINT and SIGTERM are forwarded, and the child's exit
-   code is the launcher's. The stage directory and env file are removed on exit,
+   `[[mounts]]` entries. SIGINT, SIGTERM, SIGHUP and SIGQUIT are caught from
+   before the stage is built and forwarded once the runtime starts (one that
+   arrives earlier aborts the launch), and the child's exit code is the
+   launcher's. The stage directory and env file are removed on exit,
    and leftovers older than a day are swept at the next launch.
 
 Inside, `container-entrypoint.sh` remaps the `claude` user to your host uid/gid,

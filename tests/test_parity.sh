@@ -3,7 +3,8 @@
 # compared with testdata/parity/<case>.args (one token per line). Run with
 # PARITY_UPDATE=1 to (re)write the fixtures instead of comparing. The fixtures
 # were captured from the bash launcher; where the Go launcher differs on
-# purpose (GH_TOKEN rides the env file, not argv), the case adjusts them.
+# purpose (GH_TOKEN's value rides the runtime's environment, not argv), the
+# case adjusts them.
 cd "$(dirname "$0")"
 source ./lib.sh
 setup_host_tools
@@ -33,7 +34,8 @@ normalize_argv() {
 # Optional hooks: CASE_SETUP (function, called with HOME) and CASE_FAKES
 # (function, called with the fake bin dir) run before the launch;
 # CASE_EXPECT (filter, fixture on stdin) adjusts the expected argv, and
-# CASE_CHECK (function, called with the captured env file) asserts after it.
+# CASE_CHECK (function, called with the captured env file and the runtime's
+# own $GH_TOKEN) asserts after it.
 run_case() {
     local name="$1" flavor="$2" runtime="$3"; shift 3
     local -a env_pairs=() launcher_args=()
@@ -56,6 +58,7 @@ run_case() {
 #!/usr/bin/env bash
 case "\$1 \$2" in "info "*|"info"|"system status") exit 0 ;; esac
 { printf '%s\n' "\$(basename "\$0")"; for a in "\$@"; do printf '%s\n' "\$a"; done; } >> "$out"
+printf '%s' "\${GH_TOKEN:-}" > "$root/runtime-ghtoken"
 # The launcher deletes its per-run env file on exit, so keep a copy.
 previous=
 for a in "\$@"; do
@@ -110,7 +113,7 @@ STUB
         expected="$(cat "$FIXTURE_DIR/$name.args" 2>/dev/null)"
         [[ -n "${CASE_EXPECT:-}" ]] && expected="$("$CASE_EXPECT" <<<"$expected")"
         assert_eq "$expected" "$(cat "$root/normalized")" "$name argv"
-        [[ -n "${CASE_CHECK:-}" ]] && "$CASE_CHECK" "$root/envfile"
+        [[ -n "${CASE_CHECK:-}" ]] && "$CASE_CHECK" "$root/envfile" "$(cat "$root/runtime-ghtoken" 2>/dev/null)"
     fi
     rm -rf "$root"
 }
@@ -123,15 +126,12 @@ setup_mounts() {
     printf '[env]\n\n[[mounts]]\npath = "%s"\n\n[[mounts]]\npath = "%s"\nrw = true\n' \
         "$home/extra-ro" "$home/extra-rw" > "$config_dir/config.toml"
 }
-# The Go launcher writes GH_TOKEN into the env file, never onto argv where ps
-# could read it, so drop the fixture's `-e GH_TOKEN=tok123` pair.
-drop_ghtoken_flag() {
-    awk '$0 == "-e" { held = 1; next }
-         held { if ($0 != "GH_TOKEN=tok123") { print "-e"; print }; held = 0; next }
-         { print }'
-}
-check_ghtoken_env_file() {
-    assert_contains "$(cat "$1" 2>/dev/null)" "GH_TOKEN=tok123" "personal-docker-ghtoken env file carries GH_TOKEN"
+# The Go launcher passes GH_TOKEN by name only; its value reaches the runtime
+# through the environment, never argv or the env file.
+bare_ghtoken_flag() { sed 's/^GH_TOKEN=tok123$/GH_TOKEN/'; }
+check_ghtoken_environment() {
+    assert_eq "tok123" "$2" "personal-docker-ghtoken runtime inherits GH_TOKEN"
+    assert_not_contains "$(cat "$1" 2>/dev/null)" "GH_TOKEN" "personal-docker-ghtoken env file has no GH_TOKEN"
 }
 
 for flavor in personal vertex gateway; do
@@ -146,7 +146,7 @@ for runtime in docker podman apple; do
 done
 
 run_case personal-docker-dns personal docker CLAUDE_DNS=1.1.1.1,8.8.8.8
-CASE_FAKES=fake_gh CASE_EXPECT=drop_ghtoken_flag CASE_CHECK=check_ghtoken_env_file \
+CASE_FAKES=fake_gh CASE_EXPECT=bare_ghtoken_flag CASE_CHECK=check_ghtoken_environment \
     run_case personal-docker-ghtoken personal docker
 run_case personal-docker-reseed personal docker CLAUDE_RESEED=1
 CASE_SETUP=setup_mounts run_case personal-docker-mounts personal docker

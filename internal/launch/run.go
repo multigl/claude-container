@@ -33,6 +33,28 @@ type RunOptions struct {
 	Home string
 	// WorkingDirectory is the host dir mounted at /workspace.
 	WorkingDirectory string
+	// GitHubToken reaches the runtime through its environment, never argv or
+	// disk; the argv names only the variable.
+	GitHubToken string
+}
+
+// Environment is what Run adds to the runtime's inherited environment.
+func (o RunOptions) Environment() []string {
+	if o.GitHubToken == "" {
+		return nil
+	}
+	return []string{"GH_TOKEN=" + o.GitHubToken}
+}
+
+// RelayedSignals are forwarded to the runtime instead of killing the launcher,
+// whose stage cleanup would otherwise never run.
+var RelayedSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
+
+// NotifySignals starts catching RelayedSignals; call stop when done.
+func NotifySignals() (signals chan os.Signal, stop func()) {
+	signals = make(chan os.Signal, len(RelayedSignals))
+	signal.Notify(signals, RelayedSignals...)
+	return signals, func() { signal.Stop(signals) }
 }
 
 func sshFlags(o RunOptions) (flags []string, warnings []string) {
@@ -57,6 +79,9 @@ func BuildArgs(o RunOptions) (args []string, warnings []string) {
 		args = append(args, "-it")
 	}
 	args = append(args, "-v", o.Stage.Dir+":/opt/claude-stage:ro")
+	if o.GitHubToken != "" {
+		args = append(args, "-e", "GH_TOKEN")
+	}
 	args = append(args, o.Flavor.RunFlags()...)
 	if o.Reseed {
 		args = append(args, "-e", "CLAUDE_RESEED=1")
@@ -88,17 +113,17 @@ func BuildArgs(o RunOptions) (args []string, warnings []string) {
 
 // Run executes args with inherited stdio and returns the child's exit code.
 // It never execs in place, so the caller's deferred stage cleanup still runs.
-func Run(args []string) int {
+// extraEnvironment is appended to the inherited environment. signals, from
+// NotifySignals, are relayed to the child; the caller registers them early so
+// one arriving before the child starts is still relayed, not fatal.
+func Run(args []string, extraEnvironment []string, signals <-chan os.Signal) int {
 	command := exec.Command(args[0], args[1:]...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
-
-	// Registered before Start so a signal arriving during startup is relayed
-	// instead of killing the launcher and orphaning the stage dir.
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(signals)
+	if len(extraEnvironment) > 0 {
+		command.Env = append(os.Environ(), extraEnvironment...)
+	}
 
 	if err := command.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "!! %v\n", err)

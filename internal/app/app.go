@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/multigl/claude-container/internal/buildinfo"
 	"github.com/multigl/claude-container/internal/config"
@@ -361,8 +362,9 @@ func (a *app) loadLaunchConfig() (config.Config, int) {
 	return cfg, 0
 }
 
-// githubToken comes from the host keyring via gh; it rides the env file,
-// never argv, where ps could read it.
+// githubToken comes from the host keyring via gh. Launches pass it to the
+// runtime through its environment only: argv is world-readable via ps, and
+// the env file would leave it on disk.
 func githubToken() string {
 	if _, err := exec.LookPath("gh"); err != nil {
 		return ""
@@ -383,19 +385,23 @@ func (a *app) runInContainer(command []string, reseed bool) int {
 	if !ok {
 		return 1
 	}
-	extraEnvironment := map[string]string{}
-	if token := githubToken(); token != "" {
-		extraEnvironment["GH_TOKEN"] = token
-	}
-	stage, warnings, err := launch.NewStage(a.paths, cfg, extraEnvironment, a.home, a.workingDirectory)
+	// Registered before the stage exists so an interrupt while it is being
+	// assembled lands here, and the deferred Remove still runs.
+	signals, stopSignals := launch.NotifySignals()
+	defer stopSignals()
+	token := githubToken()
+	stage, warnings, err := launch.NewStage(a.paths, cfg, a.home, a.workingDirectory)
 	a.printWarnings(warnings)
 	if err != nil {
 		fmt.Fprintf(a.stderr, "!! %v\n", err)
 		return 1
 	}
 	defer stage.Remove()
+	if code := interruptedExitCode(signals); code != 0 {
+		return code
+	}
 
-	args, warnings := launch.BuildArgs(launch.RunOptions{
+	options := launch.RunOptions{
 		Paths:            a.paths,
 		Config:           cfg,
 		Runtime:          containerRuntime,
@@ -411,7 +417,23 @@ func (a *app) runInContainer(command []string, reseed bool) int {
 		Command:          command,
 		WorkingDirectory: a.workingDirectory,
 		Home:             a.home,
-	})
+		GitHubToken:      token,
+	}
+	args, warnings := launch.BuildArgs(options)
 	a.printWarnings(warnings)
-	return launch.Run(args)
+	return launch.Run(args, options.Environment(), signals)
+}
+
+// interruptedExitCode reports a signal caught before the container started,
+// as the shell's 128+n, or 0 when none arrived.
+func interruptedExitCode(signals <-chan os.Signal) int {
+	select {
+	case received := <-signals:
+		if number, ok := received.(syscall.Signal); ok {
+			return 128 + int(number)
+		}
+		return 1
+	default:
+		return 0
+	}
 }
