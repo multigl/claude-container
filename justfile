@@ -15,11 +15,10 @@ build:
 rebuild:
     {{here}}/bin/container-runtime.sh build --flavor {{flavor}} --image {{image}} --context {{here}} --no-cache
 
-# Update claude-code: rebuild {{flavor}} pinned to the latest published version.
-# The container's claude-code is deliberately non-self-updating (pinned + ephemeral
-# + non-root), so this is how you move it forward. Resolves latest from npm and
-# passes it as CLAUDE_CODE_VERSION; the changed build arg busts just that layer.
-# Override the target version with the CLAUDE_CODE_VERSION env var.
+# Local dev: rebuild {{flavor}} pinned to the latest published claude-code. The
+# container's claude-code is deliberately non-self-updating (pinned + ephemeral +
+# non-root). Installed machines don't build: `claude-<flavor> update` pulls the
+# CI-published image instead. Override the version with CLAUDE_CODE_VERSION.
 update:
     ver="${CLAUDE_CODE_VERSION:-$(npm view @anthropic-ai/claude-code version)}"; \
     CLAUDE_CODE_VERSION="$ver" {{here}}/bin/container-runtime.sh build --flavor {{flavor}} --image {{image}} --context {{here}}; \
@@ -109,9 +108,12 @@ doctor:
         done
     @echo "== image ({{flavor}}) =="
     @rt="$({{here}}/bin/container-runtime.sh --resolve)"; bin="$rt"; [ "$rt" = apple ] && bin=container; \
+        img="$(CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh --print-paths | sed -n 's/^IMAGE=//p')"; \
+        case "$img" in ghcr.io/multigl/claude-container:*) hint="run 'claude-{{flavor}} update'" ;; \
+            *) hint="run 'just build' (FLAVOR={{flavor}}), or drop the image override" ;; esac; \
         if [ "$rt" = none ]; then echo "  SKIP: no runtime"; \
-        elif $bin image inspect {{image}} >/dev/null 2>&1; then echo "  ok: {{image}} present"; \
-        else echo "  MISSING: run 'just build' (FLAVOR={{flavor}})"; fi
+        elif $bin image inspect "$img" >/dev/null 2>&1; then echo "  ok: $img present"; \
+        else echo "  MISSING: $img -- $hint"; fi
     @echo "== auth ({{flavor}}) =="
     @CLAUDE_FLAVOR={{flavor}} {{here}}/bin/claude-launcher.sh doctor-auth
     @echo "== wrapper on PATH =="

@@ -59,8 +59,8 @@ another, and an unrecognized `CLAUDE_FLAVOR` is a hard error.
 
 ## Install
 
-One-liner (detects OS/arch + runtime, clones, builds, symlinks
-`claude-<flavor>` into `~/.local/bin`):
+One-liner (detects OS/arch + runtime, clones the launcher scripts, symlinks
+`claude-<flavor>` into `~/.local/bin`, and pulls the prebuilt image from GHCR):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash
@@ -69,6 +69,30 @@ curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/insta
 With no flags it installs the **personal** flavor (the default). Useful flags:
 `--all` (all three flavors), `--flavor vertex|gateway|personal`,
 `--runtime docker|podman|apple`, `--prefix` / `--bin-dir`, `--ref`, `--dry-run`.
+
+Nothing is built on your machine. CI builds every flavor for `linux/amd64` and
+`linux/arm64` and publishes it to `ghcr.io/multigl/claude-container`, tagged
+`<flavor>-latest` and `<flavor>-<claude-code-version>-<git-sha>`. That matters
+behind network filters like Zscaler, where a container *build* can't reach apt,
+npm, or the GitHub CLI keyring; a registry pull is all the installer needs.
+
+CI pushes a new image on every merge to `main`, and a weekly job (Sunday night,
+US time) rebuilds when a new claude-code is out. Move to it with:
+
+```sh
+claude-personal update    # pulls ghcr.io/multigl/claude-container:personal-latest
+```
+
+### Migrating from local builds
+
+The launcher used to run a locally built `claude-<flavor>:latest`. It now runs
+`ghcr.io/multigl/claude-container:<flavor>-latest` by default. To keep using a
+local build, set the `image` key in
+`~/.config/claude-container/<flavor>/launcher.conf`:
+
+```ini
+image = claude-personal:latest
+```
 
 ### Container runtime
 
@@ -92,7 +116,8 @@ instead; ineligible hosts fall through automatically.
 
 1. **A container runtime** running — docker, podman, or Apple `container`
    (auto-detected; see "Install" above).
-2. **[`just`](https://github.com/casey/just)** — `brew install just`.
+2. **[`just`](https://github.com/casey/just)** — `brew install just`. Only
+   needed to develop this repo or use the `just` recipes below.
 3. **`~/.local/bin` on `PATH`** (or set `BIN_DIR=/usr/local/bin` when installing).
 4. Flavor-specific:
    - **vertex** — a Google account with access to a Vertex AI project, and that
@@ -109,10 +134,23 @@ instead; ineligible hosts fall through automatically.
 ## Quickstart
 
 ```sh
-git clone <this-repo> claude-vertex && cd claude-vertex
-just build-all      # build all three images (shared base layer is cached)
+curl -fsSL https://raw.githubusercontent.com/multigl/claude-container/main/install.sh | bash -s -- --all
+claude-personal auth            # one-time login (see each flavor below)
+cd ~/src/some-repo && claude-personal
+claude-personal update          # later: pull the newest published image
+```
+
+### Developing this repo
+
+```sh
+git clone https://github.com/multigl/claude-container && cd claude-container
+just build-all      # build all three images locally (shared base layer is cached)
 just install-all    # symlink claude-vertex, claude-gateway, AND claude-personal onto PATH
 ```
+
+Then point each flavor at your local build in its `launcher.conf`
+(`image = claude-<flavor>:latest`); otherwise the wrappers run the published
+GHCR image. `just update` rebuilds locally on the newest claude-code.
 
 ### Vertex
 
@@ -165,11 +203,13 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 | `claude-<flavor> migrate-memory` | One-time: move the legacy shared memory bucket to this repo's per-project key (run from the repo that owns that history) |
 | `claude-<flavor> rebuild-memory-index` | Regenerate the derived `MEMORY.md` index for this repo + the global tier (normally automatic each launch; manual repair) |
 | `claude-<flavor> migrate-creds` | One-time: copy an old named cred volume into the new `$STATE_DIR/creds/…` bind dir (docker/podman only) |
+| `claude-<flavor> update` | Pull the latest published image (`ghcr.io/multigl/claude-container:<flavor>-latest`). Warns if a `launcher.conf` `image` / `CLAUDE_IMAGE` override is active. `claude-<flavor> -- update` still reaches `claude update` inside the container |
 | `claude-<flavor> --print-runtime` | Print the resolved container runtime + per-runtime availability |
 | `just build`             | Build the `FLAVOR` image (`--target`)                       |
 | `just build-vertex` / `build-gateway` / `build-personal` / `build-all` | Build a specific flavor / all three |
 | `just rebuild-vertex` / `rebuild-gateway` / `rebuild-personal` / `rebuild-all` | No-cache rebuild of a flavor / all three |
-| `just install` / `install-all` | Symlink one / all three flavor commands              |
+| `just install` / `install-all` | Symlink one / all three flavor commands and pull their published images |
+| `just update`            | Local dev: rebuild the `FLAVOR` image on the newest claude-code |
 | `just auth`              | One-time login — vertex: gcloud ADC; gateway: Okta device login; personal: `claude auth login --claudeai` |
 | `just reset-auth`        | Wipe the flavor's credential; forces re-auth                |
 | `just reseed`            | Overwrite the host config's seeded files (settings + plugins) from the image; preserves history |
@@ -186,18 +226,18 @@ The wrapper auto-detects flavor from its name. `just` recipes default to
 │                                                              │
 │  $ claude          ───────► api.anthropic.com (unchanged)    │
 │                                                              │
-│  $ claude-vertex   ──► container claude-vertex:latest        │
+│  $ claude-vertex   ──► container vertex-latest               │
 │        env: CLAUDE_CODE_USE_VERTEX=1 + Vertex pins           │
 │        creds: gcloud ADC in $STATE_DIR/creds/gcloud         │
 │        ───────► us-east5-aiplatform.googleapis.com           │
 │                                                              │
-│  $ claude-gateway  ──► container claude-gateway:latest       │
+│  $ claude-gateway  ──► container gateway-latest              │
 │        env: ANTHROPIC_BASE_URL=<gateway>                     │
 │        auth: baked apiKeyHelper mints an Okta id_token;      │
 │              refresh_token in $STATE_DIR/creds/okta         │
 │        ───────► <gateway>/v1/messages                        │
 │                                                              │
-│  $ claude-personal ──► container claude-personal:latest      │
+│  $ claude-personal ──► container personal-latest             │
 │        env: (nothing baked)                                  │
 │        auth: claude auth login --claudeai;                   │
 │              creds in $STATE_CLAUDE_DIR/.credentials.json    │
@@ -239,6 +279,16 @@ The container uses your **host** git/GitHub setup — no second login.
   `gh auth token` (works even when gh stores it in the OS keyring) and injects it
   as `GH_TOKEN`. `gh pr`/`gh api` work, and `gh` is registered as the HTTPS git
   credential helper so HTTPS `git push` works. Use HTTPS remotes.
+- **Which image runs.** By default, the published
+  `ghcr.io/multigl/claude-container:<flavor>-latest`. Override per run with
+  `CLAUDE_IMAGE=...`, or persist it in
+  `~/.config/claude-container/<flavor>/launcher.conf` (the env var wins):
+
+  ```ini
+  image = claude-personal:latest
+  ```
+
+  `claude-<flavor> --print-paths` shows the resolved `IMAGE=`.
 - **Custom DNS servers.** If lookups time out inside the container while the
   host resolves fine, set resolvers per run with `CLAUDE_DNS=1.1.1.1`, or
   persist them in `~/.config/claude-container/<flavor>/launcher.conf` (comma or
@@ -298,7 +348,7 @@ under the old name.
     $XDG_CONFIG_HOME/claude-container/<flavor>/   # you edit these; back them up
     ├── env                     # MCP creds / endpoints (chmod 600)
     ├── mounts                  # extra host dirs to expose (one host path per line; see CLAUDE.md for the format)
-    ├── launcher.conf           # host-side launcher settings (forward_ssh, dns)
+    ├── launcher.conf           # host-side launcher settings (forward_ssh, dns, image)
     └── settings.override.json  # optional Claude settings deltas, e.g. {"model": "..."}
 
     $XDG_STATE_HOME/claude-container/<flavor>/    # machine-managed; disposable
