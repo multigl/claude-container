@@ -42,8 +42,8 @@ finish() {
     [[ "$_tests_failed" -eq 0 ]]
 }
 
-# Launcher under test: the Go binary, or LAUNCHER_BIN (bin/claude-launcher.sh
-# for the bash launcher). Made absolute because suites cd and symlink to it; a
+# Launcher under test: the Go binary, or LAUNCHER_BIN to point at another
+# build. Made absolute because suites cd and symlink to it; a
 # relative LAUNCHER_BIN is taken from the repo root, since suites cd first.
 _repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAUNCHER="${LAUNCHER_BIN:-$_repo_root/bin/claude-container}"

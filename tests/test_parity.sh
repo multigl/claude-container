@@ -120,23 +120,17 @@ fake_getenforce() { printf '#!/usr/bin/env bash\necho Enforcing\n' > "$1/getenfo
 setup_mounts() {
     local home="$1" config_dir="$1/.config/claude-container/personal"
     mkdir -p "$home/extra-ro" "$home/extra-rw" "$config_dir"
-    if [[ "$LAUNCHER" == *.sh ]]; then
-        printf '%s\n%s :rw\n' "$home/extra-ro" "$home/extra-rw" > "$config_dir/mounts"
-    else
-        printf '[env]\n\n[[mounts]]\npath = "%s"\n\n[[mounts]]\npath = "%s"\nrw = true\n' \
-            "$home/extra-ro" "$home/extra-rw" > "$config_dir/config.toml"
-    fi
+    printf '[env]\n\n[[mounts]]\npath = "%s"\n\n[[mounts]]\npath = "%s"\nrw = true\n' \
+        "$home/extra-ro" "$home/extra-rw" > "$config_dir/config.toml"
 }
 # The Go launcher writes GH_TOKEN into the env file, never onto argv where ps
 # could read it, so drop the fixture's `-e GH_TOKEN=tok123` pair.
 drop_ghtoken_flag() {
-    if [[ "$LAUNCHER" == *.sh ]]; then cat; return; fi
     awk '$0 == "-e" { held = 1; next }
          held { if ($0 != "GH_TOKEN=tok123") { print "-e"; print }; held = 0; next }
          { print }'
 }
 check_ghtoken_env_file() {
-    [[ "$LAUNCHER" == *.sh ]] && return
     assert_contains "$(cat "$1" 2>/dev/null)" "GH_TOKEN=tok123" "personal-docker-ghtoken env file carries GH_TOKEN"
 }
 
